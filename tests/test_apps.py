@@ -1,4 +1,4 @@
-from sales_configurator.app import create_configurator_app, create_rules_engine_app
+from sales_configurator.app import create_configurator_app, create_landing_app, create_rules_engine_app
 
 
 def login(client) -> None:
@@ -17,6 +17,51 @@ def test_auth_required(tmp_path) -> None:
 
     api_response = client.post("/api/evaluate", json={})
     assert api_response.status_code == 401
+
+
+def test_landing_page_lists_portfolios(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    rules = create_rules_engine_app(str(db))
+    rules_client = rules.test_client()
+    login(rules_client)
+    rules_client.post(
+        "/rulesets",
+        data={
+            "name": "Laptop Rules",
+            "environment": "dev",
+            "payload": '{"constraints":[{"expression":"quantity>=1","message":"x"}],"calculations":[]}',
+        },
+    )
+
+    configurator = create_configurator_app(str(db))
+    config_client = configurator.test_client()
+    login(config_client)
+    config_client.post(
+        "/api/evaluate",
+        json={
+            "customer_id": "demo-customer",
+            "api_key": "demo-key",
+            "environment": "dev",
+            "configuration": {"quantity": 2, "base_price": 15, "discount": 0.1, "region": "NA"},
+        },
+    )
+
+    landing = create_landing_app(str(db))
+    landing_client = landing.test_client()
+    login(landing_client)
+
+    add = landing_client.post(
+        "/enhancements",
+        data={"title": "Add sidebar", "status": "in-progress", "notes": "Improved navigation"},
+    )
+    assert add.status_code == 302
+
+    page = landing_client.get("/")
+    assert page.status_code == 200
+    html = page.get_data(as_text=True)
+    assert "Laptop Rules" in html
+    assert "Add sidebar" in html
+    assert "demo-customer" in html
 
 
 def test_ruleset_create_and_deploy(tmp_path) -> None:

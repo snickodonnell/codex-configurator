@@ -1,9 +1,10 @@
 # Sales Configurator MVP
 
-This repository contains an MVP sales-configuration platform with **two independent web applications**:
+This repository contains an MVP sales-configuration platform with **three independent web applications**:
 
-1. **Rules Engine App** – manages rule authoring and environment deployment.
-2. **Configurator Front-End App** – customer-facing configuration workflow that consumes deployed rules.
+1. **Admin Landing App** – launch page for core functions and admin visibility across rules, front-end enhancements, and end-user configurations.
+2. **Rules Engine App** – manages rule authoring and environment deployment.
+3. **Configurator Front-End App** – customer-facing configuration workflow that consumes deployed rules.
 
 The implementation favors minimal dependencies and strong defaults so you can extend safely later.
 
@@ -16,6 +17,7 @@ The implementation favors minimal dependencies and strong defaults so you can ex
 
 ## Features implemented
 
+- Admin landing page with launch links and portfolio visibility for rulesets, front-end enhancements, and end-user configuration activity.
 - Ruleset CRUD-lite (create + list).
 - Environment deployments (`dev`, `prod`, etc.) with active ruleset mapping.
 - Customer access control per environment via API key.
@@ -36,6 +38,7 @@ src/sales_configurator/
   rules_engine.py        # safe evaluator + optimization engine
   __main__.py            # CLI launcher for each service
   templates/
+    landing/index.html
     rules_engine/index.html
     configurator/index.html
 tests/
@@ -50,6 +53,14 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
 ```
+
+### Run admin landing app
+
+```bash
+python -m sales_configurator landing --port 8000 --db ./data.db
+```
+
+Open: `http://localhost:8000`
 
 ### Run rules engine app
 

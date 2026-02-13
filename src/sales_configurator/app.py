@@ -92,8 +92,55 @@ def _configure_auth(app: Flask) -> None:
         return redirect(url_for("login"))
 
 
+def create_landing_app(database_path: str | None = None) -> Flask:
+    app = Flask(__name__, template_folder="templates")
+    app.config["DATABASE_PATH"] = database_path or os.environ.get("RULES_DB_PATH", "./data.db")
+    app.config["RULES_ENGINE_URL"] = os.environ.get("RULES_ENGINE_URL", "http://localhost:8001")
+    app.config["DESIGN_URL"] = os.environ.get("DESIGN_URL", "http://localhost:8002")
+    app.config["END_USER_URL"] = os.environ.get("END_USER_URL", "http://localhost:8002")
+    init_db(_db_path(app))
+    _configure_auth(app)
+
+    @app.get("/")
+    def index() -> str:
+        conn = connect(_db_path(app))
+        rulesets = conn.execute(
+            "SELECT id, name, environment, created_at FROM rulesets ORDER BY id DESC LIMIT 20"
+        ).fetchall()
+        enhancements = conn.execute(
+            "SELECT id, title, status, notes, created_at FROM frontend_enhancements ORDER BY id DESC LIMIT 20"
+        ).fetchall()
+        configurations = conn.execute(
+            "SELECT id, customer_id, environment, updated_at FROM configuration_states ORDER BY id DESC LIMIT 20"
+        ).fetchall()
+        return render_template(
+            "landing/index.html",
+            rulesets=rulesets,
+            enhancements=enhancements,
+            configurations=configurations,
+            rules_engine_url=app.config["RULES_ENGINE_URL"],
+            design_url=app.config["DESIGN_URL"],
+            end_user_url=app.config["END_USER_URL"],
+        )
+
+    @app.post("/enhancements")
+    def add_enhancement() -> Any:
+        title = request.form.get("title", "Untitled").strip() or "Untitled"
+        status = request.form.get("status", "planned").strip() or "planned"
+        notes = request.form.get("notes", "").strip()
+        conn = connect(_db_path(app))
+        with conn:
+            conn.execute(
+                "INSERT INTO frontend_enhancements(title, status, notes) VALUES (?, ?, ?)",
+                (title, status, notes),
+            )
+        return redirect(url_for("index"))
+
+    return app
+
+
 def create_rules_engine_app(database_path: str | None = None) -> Flask:
-    app = Flask("rules_engine", template_folder="templates")
+    app = Flask(__name__, template_folder="templates")
     app.config["DATABASE_PATH"] = database_path or os.environ.get("RULES_DB_PATH", "./data.db")
     init_db(_db_path(app))
     _configure_auth(app)
@@ -154,7 +201,7 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
 
 
 def create_configurator_app(database_path: str | None = None) -> Flask:
-    app = Flask("configurator", template_folder="templates")
+    app = Flask(__name__, template_folder="templates")
     app.config["DATABASE_PATH"] = database_path or os.environ.get("RULES_DB_PATH", "./data.db")
     init_db(_db_path(app))
     _configure_auth(app)

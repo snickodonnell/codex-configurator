@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS customer_access (
     api_key TEXT NOT NULL,
     environments TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS frontend_enhancements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL,
+    notes TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -57,6 +65,7 @@ def init_db(db_path: str | Path) -> None:
     with conn:
         conn.executescript(SCHEMA)
         seed_default_access(conn)
+        seed_default_enhancements(conn)
 
 
 def seed_default_access(conn: sqlite3.Connection) -> None:
@@ -67,6 +76,19 @@ def seed_default_access(conn: sqlite3.Connection) -> None:
         conn.execute(
             "INSERT INTO customer_access(customer_id, api_key, environments) VALUES (?, ?, ?)",
             ("demo-customer", "demo-key", json.dumps(["dev", "prod"])),
+        )
+
+
+def seed_default_enhancements(conn: sqlite3.Connection) -> None:
+    row = conn.execute("SELECT id FROM frontend_enhancements LIMIT 1").fetchone()
+    if row is None:
+        conn.execute(
+            "INSERT INTO frontend_enhancements(title, status, notes) VALUES (?, ?, ?)",
+            (
+                "Configurator Launch Screen",
+                "planned",
+                "Baseline launch page for admin navigation and portfolio visibility.",
+            ),
         )
 
 
