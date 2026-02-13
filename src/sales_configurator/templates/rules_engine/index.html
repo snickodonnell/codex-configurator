@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Rules Engine</title>
+    <style>body{font-family:Arial,sans-serif;margin:2rem;max-width:900px}textarea{width:100%;height:200px}</style>
+  </head>
+  <body>
+    <h1>Rules Engine Console</h1>
+    <p>Create and deploy versioned rulesets for each environment.</p>
+    <form method="post" action="/logout"><button type="submit">Logout</button></form>
+
+    <h2>Create ruleset</h2>
+    <form method="post" action="/rulesets">
+      <label>Name <input name="name" value="Default Rules" /></label>
+      <label>Environment <input name="environment" value="dev" /></label>
+      <p>Payload JSON:</p>
+      <textarea name="payload">{"constraints":[{"expression":"quantity >= 1","message":"Quantity must be at least 1."}],"calculations":[{"name":"total_price","formula":"base_price * quantity * (1-discount)"}]}</textarea>
+      <button type="submit">Save</button>
+    </form>
+
+    <h2>Rulesets</h2>
+    <ul>
+      {% for ruleset in rulesets %}
+      <li>#{{ ruleset.id }} {{ ruleset.name }} ({{ ruleset.environment }})
+        <form method="post" action="/deploy/{{ ruleset.id }}" style="display:inline">
+          <input name="environment" value="{{ ruleset.environment }}" />
+          <button type="submit">Deploy</button>
+        </form>
+      </li>
+      {% else %}
+      <li>No rulesets yet.</li>
+      {% endfor %}
+    </ul>
+
+    <h2>Active deployments</h2>
+    <ul>
+      {% for deployment in deployments %}
+      <li>{{ deployment.environment }} => ruleset #{{ deployment.ruleset_id }} at {{ deployment.deployed_at }}</li>
+      {% else %}
+      <li>No deployments yet.</li>
+      {% endfor %}
+    </ul>
+  </body>
+</html>

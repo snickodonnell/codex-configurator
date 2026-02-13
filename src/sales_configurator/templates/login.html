@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Admin Login</title>
+    <style>body{font-family:Arial,sans-serif;margin:2rem;max-width:420px}label{display:block;margin:.5rem 0}.error{color:#b00020}</style>
+  </head>
+  <body>
+    <h1>Admin Login</h1>
+    <p>Use <code>admin/admin</code> for MVP access.</p>
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    <form method="post" action="/login">
+      <label>Username <input name="username" autocomplete="username" /></label>
+      <label>Password <input type="password" name="password" autocomplete="current-password" /></label>
+      <button type="submit">Login</button>
+    </form>
+  </body>
+</html>
