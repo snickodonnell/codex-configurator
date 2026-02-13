@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sales Configurator</title>
+    <style>body{font-family:Arial,sans-serif;margin:2rem;max-width:900px}label{display:block;margin:.5rem 0}pre{background:#f5f5f5;padding:1rem}</style>
+  </head>
+  <body>
+    <h1>Sales Configuration</h1>
+    <p>Demo access: customer <code>demo-customer</code>, key <code>demo-key</code>.</p>
+    <form method="post" action="/logout"><button type="submit">Logout</button></form>
+    <form id="config-form">
+      <label>Environment <input name="environment" value="dev"></label>
+      <label>Customer ID <input name="customer_id" value="demo-customer"></label>
+      <label>API Key <input name="api_key" value="demo-key"></label>
+      <label>Quantity <input name="quantity" type="number" value="1"></label>
+      <label>Base Price <input name="base_price" type="number" value="100"></label>
+      <label>Discount (0-1) <input name="discount" type="number" step="0.01" value="0.1"></label>
+      <label>Region <input name="region" value="NA"></label>
+      <button type="button" id="evaluate">Evaluate</button>
+      <button type="button" id="submit">Submit Specification</button>
+    </form>
+    <h2>Result</h2>
+    <pre id="result">Run evaluate to view rule outcomes.</pre>
+
+    <script>
+      const form = document.getElementById('config-form');
+      const output = document.getElementById('result');
+
+      function payload() {
+        const formData = new FormData(form);
+        const quantity = Number(formData.get('quantity'));
+        const basePrice = Number(formData.get('base_price'));
+        const discount = Number(formData.get('discount'));
+        return {
+          customer_id: formData.get('customer_id'),
+          api_key: formData.get('api_key'),
+          environment: formData.get('environment'),
+          configuration: {
+            quantity,
+            base_price: basePrice,
+            discount,
+            region: formData.get('region')
+          }
+        };
+      }
+
+      document.getElementById('evaluate').onclick = async () => {
+        const res = await fetch('/api/evaluate', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload())
+        });
+        output.textContent = JSON.stringify(await res.json(), null, 2);
+      };
+
+      document.getElementById('submit').onclick = async () => {
+        const base = payload();
+        const res = await fetch('/api/submit', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            customer_id: base.customer_id,
+            api_key: base.api_key,
+            environment: base.environment,
+            specification: base.configuration
+          })
+        });
+        output.textContent = JSON.stringify(await res.json(), null, 2);
+      };
+    </script>
+  </body>
+</html>
