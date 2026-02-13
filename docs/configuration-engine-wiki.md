@@ -38,6 +38,37 @@ Example (default fallback ruleset):
 }
 ```
 
+
+### Default input values (static and dynamic)
+
+Rulesets can optionally define `default_values` to fill missing configuration inputs before constraints and calculations run.
+
+- `mode: "static"`: assigns a fixed `value`.
+- `mode: "dynamic"`: evaluates `rules` in order and uses the first matching rule. A rule can define:
+  - `condition`: expression that must evaluate truthy (optional for final fallback)
+  - `value`: fixed value
+  - `formula`: computed value expression
+
+Example:
+
+```json
+{
+  "default_values": [
+    {"name": "discount", "mode": "static", "value": 0.05},
+    {
+      "name": "region",
+      "mode": "dynamic",
+      "rules": [
+        {"condition": "country == 'DE'", "value": "EU"},
+        {"value": "NA"}
+      ]
+    }
+  ]
+}
+```
+
+When a caller explicitly provides a field, that value is preserved and defaults are not applied for that field.
+
 ### Deployment
 A deployment maps one environment (`dev`, `prod`, etc.) to one active ruleset. A new deployment to the same environment upserts and replaces the previous mapping.
 

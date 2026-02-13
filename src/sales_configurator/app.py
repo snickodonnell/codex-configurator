@@ -228,12 +228,13 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
             "valid": evaluated.valid,
             "calculations": evaluated.calculations,
             "violations": evaluated.violations,
+            "resolved_configuration": evaluated.resolved_configuration,
         }
 
         with conn:
             conn.execute(
                 "INSERT INTO configuration_states(customer_id, environment, state) VALUES (?, ?, ?)",
-                (customer_id, environment, json_dumps(configuration)),
+                (customer_id, environment, json_dumps(evaluated.resolved_configuration)),
             )
 
         return jsonify(response)
