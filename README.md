@@ -119,6 +119,10 @@ curl -X POST http://localhost:8001/optimize \
   }'
 ```
 
+## Wiki
+
+- [Configuration Engine Wiki](docs/configuration-engine-wiki.md)
+
 ## Tests
 
 ```bash
