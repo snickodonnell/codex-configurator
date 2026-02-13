@@ -32,3 +32,47 @@ def test_optimize_configuration() -> None:
         maximize=False,
     )
     assert result["objective_score"] == 0
+
+
+def test_apply_static_default_value() -> None:
+    ruleset = {
+        "default_values": [{"name": "discount", "mode": "static", "value": 0.1}],
+        "constraints": [{"expression": "discount <= 0.2", "message": "too high"}],
+        "calculations": [{"name": "net", "formula": "base_price * (1-discount)"}],
+    }
+    result = evaluate_rules(ruleset, {"base_price": 100})
+    assert result.valid is True
+    assert result.resolved_configuration["discount"] == 0.1
+    assert result.calculations["net"] == 90.0
+
+
+def test_apply_dynamic_default_value() -> None:
+    ruleset = {
+        "default_values": [
+            {
+                "name": "discount",
+                "mode": "dynamic",
+                "rules": [
+                    {"condition": "quantity >= 10", "value": 0.2},
+                    {"formula": "0.05"},
+                ],
+            }
+        ],
+        "constraints": [{"expression": "discount <= 0.2", "message": "too high"}],
+        "calculations": [{"name": "total", "formula": "quantity * base_price * (1-discount)"}],
+    }
+    result = evaluate_rules(ruleset, {"quantity": 12, "base_price": 10})
+    assert result.valid is True
+    assert result.resolved_configuration["discount"] == 0.2
+    assert result.calculations["total"] == 96.0
+
+
+def test_explicit_value_overrides_default() -> None:
+    ruleset = {
+        "default_values": [{"name": "discount", "mode": "static", "value": 0.1}],
+        "constraints": [{"expression": "discount == 0", "message": "discount must be explicit"}],
+        "calculations": [],
+    }
+    result = evaluate_rules(ruleset, {"discount": 0})
+    assert result.valid is True
+    assert result.resolved_configuration["discount"] == 0

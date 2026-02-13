@@ -95,7 +95,7 @@ def test_evaluate_and_submit(tmp_path) -> None:
         data={
             "name": "test",
             "environment": "dev",
-            "payload": '{"constraints":[{"expression":"quantity>=1","message":"x"}],"calculations":[{"name":"total","formula":"quantity*base_price"}]}',
+            "payload": '{"default_values":[{"name":"discount","mode":"static","value":0}],"constraints":[{"expression":"quantity>=1","message":"x"}],"calculations":[{"name":"total","formula":"quantity*base_price*(1-discount)"}]}',
         },
     )
     rules_client.post("/deploy/1", data={"environment": "dev"})
@@ -114,7 +114,9 @@ def test_evaluate_and_submit(tmp_path) -> None:
         },
     )
     assert evaluate.status_code == 200
-    assert evaluate.get_json()["calculations"]["total"] == 30.0
+    body = evaluate.get_json()
+    assert body["resolved_configuration"]["discount"] == 0
+    assert body["calculations"]["total"] == 30.0
 
     submit = client.post(
         "/api/submit",

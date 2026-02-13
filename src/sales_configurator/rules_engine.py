@@ -72,24 +72,65 @@ class EvaluationResult:
     valid: bool
     calculations: dict[str, float]
     violations: list[str]
+    resolved_configuration: dict[str, Any]
+
+
+def _resolve_default_value(default_entry: dict[str, Any], context: dict[str, Any]) -> Any:
+    mode = default_entry.get("mode", "static")
+    if mode == "static":
+        if "value" not in default_entry:
+            raise ValueError("static defaults must define a value")
+        return default_entry["value"]
+
+    if mode != "dynamic":
+        raise ValueError(f"unsupported default mode: {mode}")
+
+    rules = default_entry.get("rules", [])
+    for rule in rules:
+        condition = rule.get("condition")
+        if condition is not None and not bool(safe_eval(condition, context)):
+            continue
+        if "formula" in rule:
+            return safe_eval(rule["formula"], context)
+        if "value" in rule:
+            return rule["value"]
+        raise ValueError("dynamic default rule must define value or formula")
+
+    raise ValueError(f"no dynamic default matched for field: {default_entry.get('name', '<unknown>')}")
+
+
+def apply_default_values(ruleset: dict[str, Any], configuration: dict[str, Any]) -> dict[str, Any]:
+    resolved = {**configuration}
+    for default_entry in ruleset.get("default_values", []):
+        name = default_entry["name"]
+        if name in resolved:
+            continue
+        resolved[name] = _resolve_default_value(default_entry, resolved)
+    return resolved
 
 
 
 def evaluate_rules(ruleset: dict[str, Any], configuration: dict[str, Any]) -> EvaluationResult:
+    resolved_configuration = apply_default_values(ruleset, configuration)
     violations: list[str] = []
     for constraint in ruleset.get("constraints", []):
-        result = safe_eval(constraint["expression"], configuration)
+        result = safe_eval(constraint["expression"], resolved_configuration)
         if not bool(result):
             violations.append(constraint["message"])
 
     calculations: dict[str, float] = {}
-    working_context = {**configuration}
+    working_context = {**resolved_configuration}
     for calc in ruleset.get("calculations", []):
         value = safe_eval(calc["formula"], working_context)
         calculations[calc["name"]] = float(value)
         working_context[calc["name"]] = value
 
-    return EvaluationResult(valid=(len(violations) == 0), calculations=calculations, violations=violations)
+    return EvaluationResult(
+        valid=(len(violations) == 0),
+        calculations=calculations,
+        violations=violations,
+        resolved_configuration=resolved_configuration,
+    )
 
 
 

@@ -15,7 +15,7 @@
       <label>Name <input name="name" value="Default Rules" /></label>
       <label>Environment <input name="environment" value="dev" /></label>
       <p>Payload JSON:</p>
-      <textarea name="payload">{"constraints":[{"expression":"quantity >= 1","message":"Quantity must be at least 1."}],"calculations":[{"name":"total_price","formula":"base_price * quantity * (1-discount)"}]}</textarea>
+      <textarea name="payload">{"default_values":[{"name":"discount","mode":"static","value":0.05},{"name":"region","mode":"dynamic","rules":[{"condition":"country == 'DE'","value":"EU"},{"value":"NA"}]}],"constraints":[{"expression":"quantity >= 1","message":"Quantity must be at least 1."}],"calculations":[{"name":"total_price","formula":"base_price * quantity * (1-discount)"}]}</textarea>
       <button type="submit">Save</button>
     </form>
 
