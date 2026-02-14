@@ -22,6 +22,7 @@ The implementation favors minimal dependencies, deterministic rules processing, 
 - Ruleset CRUD-lite (create + list + edit).
 - Visual rules workspace with product switching, category/sub-category organization, and sortable execution order.
 - Rule cards default to read-only and can be toggled editable on click for safer authoring.
+- Browser-safe workspace rendering that avoids HTML injection patterns and uses standards-based DOM APIs compatible with Chrome, Firefox, Edge, and Safari.
 - Environment deployments (`dev`, `prod`, etc.) with active ruleset mapping.
 - Customer access control per environment via API key.
 - Config evaluation endpoint:

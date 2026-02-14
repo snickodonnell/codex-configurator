@@ -428,3 +428,36 @@ def test_workspace_rule_position_update(tmp_path) -> None:
     sub_after = product_after["categories"][0]["subcategories"][0]
     created_rule = next(item for item in sub_after["rules"] if item["id"] == rule_id)
     assert created_rule["position"] == 1
+
+
+def test_workspace_delete_category_removes_child_categories_and_rules(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    app = create_rules_engine_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    workspace = client.get("/api/workspace").get_json()
+    product = workspace["products"][0]
+    category = product["categories"][0]
+    subcategory = category["subcategories"][0]
+
+    created = client.post(
+        "/api/workspace/rules",
+        json={
+            "product_id": product["id"],
+            "category_id": category["id"],
+            "subcategory_id": subcategory["id"],
+            "rule_type": "constraint",
+            "expression": "quantity <= 10",
+            "message": "Quantity cap",
+            "position": 2,
+        },
+    )
+    assert created.status_code == 201
+
+    deleted = client.delete(f"/api/workspace/categories/{category['id']}")
+    assert deleted.status_code == 200
+
+    refreshed = client.get("/api/workspace").get_json()
+    refreshed_product = next(item for item in refreshed["products"] if item["id"] == product["id"])
+    assert refreshed_product["categories"] == []

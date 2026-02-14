@@ -401,17 +401,11 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
         conn = connect(_db_path(app))
         child_ids = [row["id"] for row in conn.execute("SELECT id FROM workspace_categories WHERE parent_id = ?", (category_id,))]
         with conn:
-            conn.execute(
-                f"DELETE FROM workspace_rules WHERE category_id = ? OR subcategory_id IN ({','.join('?' for _ in child_ids)})"
-                if child_ids
-                else "DELETE FROM workspace_rules WHERE category_id = ?",
-                (category_id, *child_ids),
-            )
+            conn.execute("DELETE FROM workspace_rules WHERE category_id = ?", (category_id,))
+            for child_id in child_ids:
+                conn.execute("DELETE FROM workspace_rules WHERE subcategory_id = ?", (child_id,))
             if child_ids:
-                conn.execute(
-                    f"DELETE FROM workspace_categories WHERE id IN ({','.join('?' for _ in child_ids)})",
-                    child_ids,
-                )
+                conn.executemany("DELETE FROM workspace_categories WHERE id = ?", [(child_id,) for child_id in child_ids])
             conn.execute("DELETE FROM workspace_categories WHERE id = ?", (category_id,))
         return jsonify({"status": "deleted"})
 

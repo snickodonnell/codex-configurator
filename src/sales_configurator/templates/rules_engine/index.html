@@ -2,29 +2,46 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Rules Engine</title>
     <style>
-      :root { --bg:#f4f6fb; --card:#fff; --text:#172033; --muted:#5d6880; --border:#d7deea; --accent:#4f46e5; --accent-soft:#ede9fe; }
+      :root {
+        --bg: #f4f6fb;
+        --card: #ffffff;
+        --text: #172033;
+        --muted: #5d6880;
+        --border: #d7deea;
+        --accent: #4f46e5;
+        --accent-soft: #ede9fe;
+        --danger: #dc2626;
+      }
       * { box-sizing: border-box; }
       body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
       .page { max-width: 1400px; margin: 0 auto; padding: 1.25rem; }
-      .topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; }
-      .layout { display:grid; grid-template-columns: 340px 1fr; gap:1rem; }
-      .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:1rem; box-shadow: 0 8px 24px rgba(17,24,39,.05); }
-      .muted { color:var(--muted); font-size:.9rem; }
-      .products button.active { background: var(--accent); color:white; }
-      button { border:1px solid var(--border); background:#fff; border-radius:8px; padding:.45rem .7rem; cursor:pointer; }
-      button.primary { background:var(--accent); color:white; border-color:var(--accent); }
-      .stack { display:flex; flex-direction:column; gap:.6rem; }
-      .row { display:flex; gap:.5rem; align-items:center; }
-      input, select, textarea { width:100%; border:1px solid var(--border); border-radius:8px; padding:.5rem; }
-      textarea { min-height:160px; font-family: ui-monospace, monospace; }
-      .workspace { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }
-      .category { border:1px solid var(--border); border-radius:12px; padding:.8rem; background:#fbfdff; }
-      .rule { border:1px solid var(--border); border-radius:10px; padding:.6rem; margin-top:.45rem; background:#fff; }
-      .rule.readonly { opacity:.88; }
-      .pill { display:inline-block; background:var(--accent-soft); color:#4338ca; border-radius:999px; font-size:.75rem; padding:.1rem .45rem; }
-      .grid2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.6rem; }
+      .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: .75rem; }
+      .layout { display: grid; grid-template-columns: 340px 1fr; gap: 1rem; align-items: start; }
+      .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 1rem; box-shadow: 0 8px 24px rgba(17, 24, 39, .05); }
+      .muted { color: var(--muted); font-size: .9rem; }
+      .products button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+      button { border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: .45rem .7rem; cursor: pointer; }
+      button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+      button.danger { border-color: #fecaca; color: var(--danger); }
+      .stack { display: flex; flex-direction: column; gap: .6rem; }
+      .row { display: flex; gap: .5rem; align-items: center; }
+      .row.wrap { flex-wrap: wrap; }
+      input, select, textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: .5rem; }
+      textarea { min-height: 160px; font-family: ui-monospace, monospace; }
+      .workspace { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+      .category { border: 1px solid var(--border); border-radius: 12px; padding: .8rem; background: #fbfdff; }
+      .rule { border: 1px solid var(--border); border-radius: 10px; padding: .6rem; margin-top: .45rem; background: #fff; }
+      .rule.readonly { opacity: .95; }
+      .pill { display: inline-block; background: var(--accent-soft); color: #4338ca; border-radius: 999px; font-size: .75rem; padding: .1rem .45rem; }
+      .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
+      .status { min-height: 1.2rem; }
+      @media (max-width: 1100px) {
+        .layout { grid-template-columns: 1fr; }
+        .workspace { grid-template-columns: 1fr; }
+      }
     </style>
   </head>
   <body>
@@ -32,7 +49,7 @@
       <div class="topbar">
         <div>
           <h1 style="margin:0">Rules Editor Workspace</h1>
-          <div class="muted">Design market-grade product rule catalogs with execution ordering and nested categorization.</div>
+          <div class="muted">Design product rule catalogs with safe editing, hierarchy controls, and execution ordering.</div>
         </div>
         <form method="post" action="/logout"><button type="submit">Logout</button></form>
       </div>
@@ -44,8 +61,9 @@
           <div class="stack" style="margin-top:.8rem">
             <input id="newProductName" placeholder="New product name" />
             <input id="newProductDescription" placeholder="Description" />
-            <button class="primary" onclick="createProduct()">Add product</button>
+            <button id="addProductBtn" class="primary" type="button">Add product</button>
           </div>
+          <div id="workspaceStatus" class="status muted" role="status" aria-live="polite"></div>
         </section>
 
         <section class="stack">
@@ -70,92 +88,419 @@
               <p class="muted">Rules DSL</p>
               <textarea name="pseudo_rules" id="pseudo_rules">{{ selected_pseudocode if selected_pseudocode else "DEFAULT discount = 0.05\nCONSTRAINT quantity >= 1 :: Quantity must be at least 1\nCALC total_price = base_price * quantity * (1 - discount)" }}</textarea>
               <details><summary>Raw JSON payload</summary><textarea name="payload">{{ selected_ruleset.payload if selected_ruleset else '' }}</textarea></details>
-              <div class="row" style="margin-top:.6rem"><button type="button" onclick="exportWorkspaceRules()">Load from workspace</button><button class="primary" type="submit">{% if selected_ruleset %}Update{% else %}Save{% endif %}</button></div>
+              <div class="row" style="margin-top:.6rem">
+                <button id="loadWorkspaceRulesBtn" type="button">Load from workspace</button>
+                <button class="primary" type="submit">{% if selected_ruleset %}Update{% else %}Save{% endif %}</button>
+              </div>
             </form>
           </article>
-        
+
           <article class="card" data-ui-region="ruleset-browser">
             <h3>Existing rulesets</h3>
             {% for ruleset in rulesets %}
-            <div class="row" style="justify-content:space-between; border-top:1px solid var(--border); padding-top:.45rem; margin-top:.45rem;">
-              <div><strong>#{{ ruleset.id }} {{ ruleset.name }}</strong><div class="muted">{{ ruleset.product_name }} / {{ ruleset.category }} / {{ ruleset.subcategory }} • v{{ ruleset.version }} • {{ ruleset.environment }}</div></div>
-              <div class="row"><form method="get" action="/"><input type="hidden" name="edit" value="{{ ruleset.id }}" /><button type="submit">Edit</button></form><form method="post" action="/deploy/{{ ruleset.id }}"><input name="environment" value="{{ ruleset.environment }}" style="width:80px"/><button type="submit">Deploy</button></form></div>
+            <div class="row wrap" style="justify-content:space-between; border-top:1px solid var(--border); padding-top:.45rem; margin-top:.45rem;">
+              <div>
+                <strong>#{{ ruleset.id }} {{ ruleset.name }}</strong>
+                <div class="muted">{{ ruleset.product_name }} / {{ ruleset.category }} / {{ ruleset.subcategory }} • v{{ ruleset.version }} • {{ ruleset.environment }}</div>
+              </div>
+              <div class="row wrap">
+                <form method="get" action="/"><input type="hidden" name="edit" value="{{ ruleset.id }}" /><button type="submit">Edit</button></form>
+                <form method="post" action="/deploy/{{ ruleset.id }}"><input name="environment" value="{{ ruleset.environment }}" style="width:80px"/><button type="submit">Deploy</button></form>
+              </div>
             </div>
             {% else %}<p class="muted">No rulesets yet.</p>{% endfor %}
           </article>
 
           <article class="card"><h3>Active deployments</h3><ul>{% for deployment in deployments %}<li>{{ deployment.environment }} => ruleset #{{ deployment.ruleset_id }} at {{ deployment.deployed_at }}</li>{% else %}<li>No deployments yet.</li>{% endfor %}</ul></article>
-</section>
+        </section>
       </div>
     </div>
-    <script>
-      let workspaceData = { products: [] };
-      let activeProductId = null;
 
-      async function fetchJson(url, opts = {}) { const r = await fetch(url, { headers: { 'Content-Type':'application/json' }, ...opts }); if (!r.ok) throw new Error(await r.text()); return r.json(); }
-      async function loadWorkspace() {
-        workspaceData = await fetchJson('/api/workspace');
-        if (!activeProductId && workspaceData.products.length) activeProductId = workspaceData.products[0].id;
-        renderProducts(); renderWorkspace();
+    <script>
+      var workspaceData = { products: [] };
+      var activeProductId = null;
+
+      function statusMessage(message, isError) {
+        var node = document.getElementById("workspaceStatus");
+        node.textContent = message || "";
+        node.style.color = isError ? "#b91c1c" : "";
       }
-      function activeProduct(){ return workspaceData.products.find(p => p.id===activeProductId); }
-      function renderProducts(){
-        const node=document.getElementById('productList'); node.innerHTML='';
-        workspaceData.products.forEach(p=>{
-          const row=document.createElement('div'); row.className='row';
-          row.innerHTML=`<button class='${p.id===activeProductId?'active':''}' onclick='switchProduct(${p.id})'>${p.name}</button><button onclick='deleteProduct(${p.id})'>Delete</button>`;
+
+      function toText(value) {
+        return value == null ? "" : String(value);
+      }
+
+      function activeProduct() {
+        return workspaceData.products.find(function (p) { return p.id === activeProductId; }) || null;
+      }
+
+      async function fetchJson(url, opts) {
+        var request = opts || {};
+        var headers = request.headers || {};
+        headers["Content-Type"] = "application/json";
+        request.headers = headers;
+        var response = await fetch(url, request);
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        return response.json();
+      }
+
+      function buildButton(label, className, onClick) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        if (className) button.className = className;
+        button.addEventListener("click", onClick);
+        return button;
+      }
+
+      function createReadOnlyRule(rule) {
+        var wrapper = document.createElement("div");
+        wrapper.className = "rule readonly";
+
+        var top = document.createElement("div");
+        top.className = "row wrap";
+
+        var typePill = document.createElement("span");
+        typePill.className = "pill";
+        typePill.textContent = toText(rule.rule_type);
+        top.appendChild(typePill);
+
+        var order = document.createElement("strong");
+        order.textContent = "#" + toText(rule.position);
+        top.appendChild(order);
+
+        var code = document.createElement("code");
+        code.textContent = toText(rule.expression);
+        top.appendChild(code);
+
+        top.appendChild(buildButton("Edit", "", function () { setEditable(rule.id, true); }));
+        top.appendChild(buildButton("↑", "", function () { moveRule(rule.id, Number(rule.position) - 1); }));
+        top.appendChild(buildButton("↓", "", function () { moveRule(rule.id, Number(rule.position) + 1); }));
+        top.appendChild(buildButton("Delete", "danger", function () { deleteRule(rule.id); }));
+
+        wrapper.appendChild(top);
+
+        var message = document.createElement("div");
+        message.className = "muted";
+        message.textContent = toText(rule.message);
+        wrapper.appendChild(message);
+        return wrapper;
+      }
+
+      function createEditableRule(rule) {
+        var wrapper = document.createElement("div");
+        wrapper.className = "rule";
+
+        var grid = document.createElement("div");
+        grid.className = "grid2";
+
+        var type = document.createElement("select");
+        ["constraint", "calculation", "default"].forEach(function (optionValue) {
+          var option = document.createElement("option");
+          option.value = optionValue;
+          option.textContent = optionValue;
+          if (rule.rule_type === optionValue) option.selected = true;
+          type.appendChild(option);
+        });
+        type.id = "type-" + rule.id;
+
+        var target = document.createElement("input");
+        target.id = "target-" + rule.id;
+        target.placeholder = "target field (for default/calculation)";
+        target.value = toText(rule.target);
+
+        var expression = document.createElement("input");
+        expression.id = "expr-" + rule.id;
+        expression.placeholder = "expression";
+        expression.value = toText(rule.expression);
+        expression.style.gridColumn = "span 2";
+
+        var message = document.createElement("input");
+        message.id = "msg-" + rule.id;
+        message.placeholder = "message (for constraints)";
+        message.value = toText(rule.message);
+        message.style.gridColumn = "span 2";
+
+        grid.appendChild(type);
+        grid.appendChild(target);
+        grid.appendChild(expression);
+        grid.appendChild(message);
+
+        var actions = document.createElement("div");
+        actions.className = "row";
+        actions.appendChild(buildButton("Save", "primary", function () { saveRule(rule.id, Number(rule.position)); }));
+        actions.appendChild(buildButton("Readonly", "", function () { setEditable(rule.id, false); }));
+
+        wrapper.appendChild(grid);
+        wrapper.appendChild(actions);
+        return wrapper;
+      }
+
+      function renderRule(rule) {
+        return rule.is_editable ? createEditableRule(rule) : createReadOnlyRule(rule);
+      }
+
+      function createCategoryHeader(category, categoryLabel, onAddRule, extraActions) {
+        var row = document.createElement("div");
+        row.className = "row wrap";
+
+        var title = document.createElement("strong");
+        title.textContent = toText(category.name);
+        row.appendChild(title);
+
+        var pill = document.createElement("span");
+        pill.className = "pill";
+        pill.textContent = categoryLabel;
+        row.appendChild(pill);
+
+        extraActions.forEach(function (action) { row.appendChild(action); });
+        row.appendChild(buildButton("+ Rule", "", onAddRule));
+        return row;
+      }
+
+      function renderWorkspace() {
+        var product = activeProduct();
+        document.getElementById("activeProductTitle").textContent = product ? "Rules for " + product.name : "Rules catalog";
+        document.getElementById("rulesetProduct").value = product ? product.name : "";
+
+        var root = document.getElementById("workspace");
+        root.innerHTML = "";
+        if (!product) return;
+
+        product.categories.forEach(function (category) {
+          var card = document.createElement("div");
+          card.className = "category";
+
+          var header = createCategoryHeader(
+            category,
+            "category",
+            function () { addRule(category.id, null); },
+            [
+              buildButton("↑", "", function () { moveCategory(category.id, -1, category.name, category.position); }),
+              buildButton("↓", "", function () { moveCategory(category.id, 1, category.name, category.position); }),
+              buildButton("Edit", "", function () { renameCategory(category.id, category.name, category.position); }),
+              buildButton("Delete", "danger", function () { deleteCategory(category.id); }),
+              buildButton("+ Sub-category", "", function () { addSubcategory(category.id); })
+            ]
+          );
+          card.appendChild(header);
+
+          category.rules.forEach(function (rule) { card.appendChild(renderRule(rule)); });
+
+          category.subcategories.forEach(function (subcategory) {
+            var subCard = document.createElement("div");
+            subCard.className = "category";
+            subCard.style.marginTop = ".5rem";
+
+            subCard.appendChild(
+              createCategoryHeader(
+                subcategory,
+                "sub-category",
+                function () { addRule(category.id, subcategory.id); },
+                [
+                  buildButton("Edit", "", function () { renameCategory(subcategory.id, subcategory.name, subcategory.position); }),
+                  buildButton("Delete", "danger", function () { deleteCategory(subcategory.id); })
+                ]
+              )
+            );
+
+            subcategory.rules.forEach(function (rule) { subCard.appendChild(renderRule(rule)); });
+            card.appendChild(subCard);
+          });
+
+          root.appendChild(card);
+        });
+
+        root.appendChild(buildButton("+ Category", "primary", addCategory));
+      }
+
+      function renderProducts() {
+        var node = document.getElementById("productList");
+        node.innerHTML = "";
+
+        workspaceData.products.forEach(function (product) {
+          var row = document.createElement("div");
+          row.className = "row wrap";
+
+          var switchBtn = buildButton(product.name, product.id === activeProductId ? "active" : "", function () {
+            activeProductId = product.id;
+            renderProducts();
+            renderWorkspace();
+          });
+          row.appendChild(switchBtn);
+
+          row.appendChild(buildButton("Delete", "danger", function () { deleteProduct(product.id); }));
           node.appendChild(row);
         });
       }
-      function renderWorkspace(){
-        const product=activeProduct();
-        document.getElementById('activeProductTitle').textContent = product ? `Rules for ${product.name}` : 'Rules catalog';
-        document.getElementById('rulesetProduct').value = product ? product.name : '';
-        const root=document.getElementById('workspace'); root.innerHTML=''; if(!product) return;
-        product.categories.forEach(cat=>{
-          const box=document.createElement('div'); box.className='category';
-          box.innerHTML=`<div class='row'><strong>${cat.name}</strong><span class='pill'>category</span><button onclick='moveCategory(${cat.id},-1)'>↑</button><button onclick='moveCategory(${cat.id},1)'>↓</button><button onclick='renameCategory(${cat.id},"${cat.name}",${cat.position})'>Edit</button><button onclick='deleteCategory(${cat.id})'>Delete</button></div><button onclick='addSubcategory(${cat.id})'>+ Sub-category</button><button onclick='addRule(${cat.id}, null)'>+ Rule</button>`;
-          cat.rules.forEach(rule=> box.appendChild(renderRule(rule)));
-          cat.subcategories.forEach(sub=>{
-            const subBox=document.createElement('div'); subBox.className='category'; subBox.style.marginTop='.5rem';
-            subBox.innerHTML=`<div class='row'><strong>${sub.name}</strong><span class='pill'>sub-category</span><button onclick='renameCategory(${sub.id},"${sub.name}",${sub.position})'>Edit</button><button onclick='deleteCategory(${sub.id})'>Delete</button><button onclick='addRule(${cat.id}, ${sub.id})'>+ Rule</button></div>`;
-            sub.rules.forEach(rule=> subBox.appendChild(renderRule(rule)));
-            box.appendChild(subBox);
-          });
-          root.appendChild(box);
-        });
-        const add=document.createElement('button'); add.className='primary'; add.textContent='+ Category'; add.onclick=()=>addCategory(); root.appendChild(add);
-      }
-      function renderRule(rule){
-        const div=document.createElement('div'); div.className=`rule ${rule.is_editable?'':'readonly'}`;
-        if(!rule.is_editable){ div.innerHTML=`<div class='row'><span class='pill'>${rule.rule_type}</span><strong>#${rule.position}</strong><code>${rule.expression}</code><button onclick='setEditable(${rule.id},true)'>Edit</button><button onclick='moveRule(${rule.id},${rule.position-1})'>↑</button><button onclick='moveRule(${rule.id},${rule.position+1})'>↓</button><button onclick='deleteRule(${rule.id})'>Delete</button></div><div class='muted'>${rule.message || ''}</div>`; return div; }
-        div.innerHTML=`<div class='grid2'><select id='type-${rule.id}'><option ${rule.rule_type==='constraint'?'selected':''}>constraint</option><option ${rule.rule_type==='calculation'?'selected':''}>calculation</option><option ${rule.rule_type==='default'?'selected':''}>default</option></select><input id='target-${rule.id}' value='${rule.target || ''}' placeholder='target field (for default/calculation)'/><input id='expr-${rule.id}' value='${rule.expression}' placeholder='expression' style='grid-column:span 2'/><input id='msg-${rule.id}' value='${rule.message || ''}' placeholder='message (for constraints)' style='grid-column:span 2'/></div><div class='row'><button class='primary' onclick='saveRule(${rule.id},${rule.position})'>Save</button><button onclick='setEditable(${rule.id},false)'>Readonly</button></div>`;
-        return div;
+
+      async function loadWorkspace() {
+        try {
+          workspaceData = await fetchJson("/api/workspace");
+          if (!activeProductId && workspaceData.products.length > 0) {
+            activeProductId = workspaceData.products[0].id;
+          }
+          renderProducts();
+          renderWorkspace();
+          statusMessage("");
+        } catch (error) {
+          statusMessage("Could not load workspace: " + error.message, true);
+        }
       }
 
-      async function createProduct(){ await fetchJson('/api/workspace/products',{method:'POST', body:JSON.stringify({name:newProductName.value, description:newProductDescription.value})}); newProductName.value=''; newProductDescription.value=''; await loadWorkspace(); }
-      async function switchProduct(id){ activeProductId=id; renderProducts(); renderWorkspace(); }
-      async function deleteProduct(id){ await fetchJson(`/api/workspace/products/${id}`,{method:'DELETE'}); if(activeProductId===id) activeProductId=null; await loadWorkspace(); }
-      async function addCategory(){ const p=activeProduct(); await fetchJson('/api/workspace/categories',{method:'POST', body:JSON.stringify({product_id:p.id, name:'New Category', position:(p.categories.length+1)})}); await loadWorkspace(); }
-      async function addSubcategory(parentId){ const p=activeProduct(); await fetchJson('/api/workspace/categories',{method:'POST', body:JSON.stringify({product_id:p.id,parent_id:parentId,name:'New Sub-category',position:99})}); await loadWorkspace(); }
-      async function renameCategory(id,name,position){ const next=prompt('Category name',name); if(!next) return; await fetchJson(`/api/workspace/categories/${id}`,{method:'PUT',body:JSON.stringify({name:next,position})}); await loadWorkspace(); }
-      async function moveCategory(id,delta){ const p=activeProduct(); const c=p.categories.find(x=>x.id===id); if(!c) return; await fetchJson(`/api/workspace/categories/${id}`,{method:'PUT', body:JSON.stringify({name:c.name, position:Math.max(1,(c.position||1)+delta)})}); await loadWorkspace(); }
-      async function deleteCategory(id){ await fetchJson(`/api/workspace/categories/${id}`,{method:'DELETE'}); await loadWorkspace(); }
-      async function addRule(categoryId,subcategoryId){ const p=activeProduct(); await fetchJson('/api/workspace/rules',{method:'POST',body:JSON.stringify({product_id:p.id,category_id:categoryId,subcategory_id:subcategoryId,rule_type:'constraint',expression:'quantity >= 1',message:'Required',position:99})}); await loadWorkspace(); }
-      async function setEditable(id,val){ await fetchJson(`/api/workspace/rules/${id}/editable`,{method:'POST',body:JSON.stringify({is_editable:val})}); await loadWorkspace(); }
-      async function saveRule(id,position){ await fetchJson(`/api/workspace/rules/${id}`,{method:'PUT',body:JSON.stringify({rule_type:document.getElementById(`type-${id}`).value,target:document.getElementById(`target-${id}`).value,expression:document.getElementById(`expr-${id}`).value,message:document.getElementById(`msg-${id}`).value,position,is_editable:true})}); await loadWorkspace(); }
-      async function moveRule(id,position){ await fetchJson(`/api/workspace/rules/${id}/position`,{method:'POST',body:JSON.stringify({position:Math.max(1,position)})}); await loadWorkspace(); }
-      async function deleteRule(id){ await fetchJson(`/api/workspace/rules/${id}`,{method:'DELETE'}); await loadWorkspace(); }
-      function exportWorkspaceRules(){
-        const p=activeProduct(); if(!p) return;
-        const lines=[];
-        p.categories.forEach(cat=>{ cat.rules.concat(...cat.subcategories.map(s=>s.rules)).sort((a,b)=>a.position-b.position).forEach(rule=>{
-          if(rule.rule_type==='calculation') lines.push(`CALC ${rule.target || 'result'} = ${rule.expression}`);
-          else if(rule.rule_type==='default') lines.push(`DEFAULT ${rule.target || 'field'} = ${rule.expression}`);
-          else lines.push(`CONSTRAINT ${rule.expression} :: ${rule.message || 'Rule violation'}`);
-        });});
-        document.getElementById('pseudo_rules').value = lines.join('\n');
+      async function createProduct() {
+        var name = document.getElementById("newProductName").value.trim();
+        var description = document.getElementById("newProductDescription").value.trim();
+        if (!name) {
+          statusMessage("Product name is required", true);
+          return;
+        }
+        await fetchJson("/api/workspace/products", { method: "POST", body: JSON.stringify({ name: name, description: description }) });
+        document.getElementById("newProductName").value = "";
+        document.getElementById("newProductDescription").value = "";
+        await loadWorkspace();
       }
+
+      async function deleteProduct(productId) {
+        if (!window.confirm("Delete this product and all its categories/rules?")) return;
+        await fetchJson("/api/workspace/products/" + productId, { method: "DELETE" });
+        if (activeProductId === productId) activeProductId = null;
+        await loadWorkspace();
+      }
+
+      async function addCategory() {
+        var product = activeProduct();
+        if (!product) return;
+        await fetchJson("/api/workspace/categories", {
+          method: "POST",
+          body: JSON.stringify({ product_id: product.id, name: "New Category", position: product.categories.length + 1 })
+        });
+        await loadWorkspace();
+      }
+
+      async function addSubcategory(parentId) {
+        var product = activeProduct();
+        if (!product) return;
+        await fetchJson("/api/workspace/categories", {
+          method: "POST",
+          body: JSON.stringify({ product_id: product.id, parent_id: parentId, name: "New Sub-category", position: 99 })
+        });
+        await loadWorkspace();
+      }
+
+      async function renameCategory(categoryId, currentName, position) {
+        var nextName = window.prompt("Category name", currentName);
+        if (!nextName) return;
+        await fetchJson("/api/workspace/categories/" + categoryId, {
+          method: "PUT",
+          body: JSON.stringify({ name: nextName.trim(), position: position })
+        });
+        await loadWorkspace();
+      }
+
+      async function moveCategory(categoryId, delta, name, currentPosition) {
+        await fetchJson("/api/workspace/categories/" + categoryId, {
+          method: "PUT",
+          body: JSON.stringify({ name: name, position: Math.max(1, Number(currentPosition || 1) + delta) })
+        });
+        await loadWorkspace();
+      }
+
+      async function deleteCategory(categoryId) {
+        if (!window.confirm("Delete this category and all child rules?")) return;
+        await fetchJson("/api/workspace/categories/" + categoryId, { method: "DELETE" });
+        await loadWorkspace();
+      }
+
+      async function addRule(categoryId, subcategoryId) {
+        var product = activeProduct();
+        if (!product) return;
+        await fetchJson("/api/workspace/rules", {
+          method: "POST",
+          body: JSON.stringify({
+            product_id: product.id,
+            category_id: categoryId,
+            subcategory_id: subcategoryId,
+            rule_type: "constraint",
+            expression: "quantity >= 1",
+            message: "Required",
+            position: 99
+          })
+        });
+        await loadWorkspace();
+      }
+
+      async function setEditable(ruleId, isEditable) {
+        await fetchJson("/api/workspace/rules/" + ruleId + "/editable", {
+          method: "POST",
+          body: JSON.stringify({ is_editable: isEditable })
+        });
+        await loadWorkspace();
+      }
+
+      async function saveRule(ruleId, position) {
+        await fetchJson("/api/workspace/rules/" + ruleId, {
+          method: "PUT",
+          body: JSON.stringify({
+            rule_type: document.getElementById("type-" + ruleId).value,
+            target: document.getElementById("target-" + ruleId).value,
+            expression: document.getElementById("expr-" + ruleId).value,
+            message: document.getElementById("msg-" + ruleId).value,
+            position: position,
+            is_editable: true
+          })
+        });
+        await loadWorkspace();
+      }
+
+      async function moveRule(ruleId, position) {
+        await fetchJson("/api/workspace/rules/" + ruleId + "/position", {
+          method: "POST",
+          body: JSON.stringify({ position: Math.max(1, position) })
+        });
+        await loadWorkspace();
+      }
+
+      async function deleteRule(ruleId) {
+        await fetchJson("/api/workspace/rules/" + ruleId, { method: "DELETE" });
+        await loadWorkspace();
+      }
+
+      function exportWorkspaceRules() {
+        var product = activeProduct();
+        if (!product) return;
+
+        var lines = [];
+        product.categories.forEach(function (category) {
+          var rules = category.rules.slice();
+          category.subcategories.forEach(function (subcategory) {
+            subcategory.rules.forEach(function (rule) { rules.push(rule); });
+          });
+          rules.sort(function (a, b) { return Number(a.position) - Number(b.position); });
+          rules.forEach(function (rule) {
+            if (rule.rule_type === "calculation") {
+              lines.push("CALC " + (rule.target || "result") + " = " + rule.expression);
+            } else if (rule.rule_type === "default") {
+              lines.push("DEFAULT " + (rule.target || "field") + " = " + rule.expression);
+            } else {
+              lines.push("CONSTRAINT " + rule.expression + " :: " + (rule.message || "Rule violation"));
+            }
+          });
+        });
+
+        document.getElementById("pseudo_rules").value = lines.join("\n");
+      }
+
+      document.getElementById("addProductBtn").addEventListener("click", function () {
+        createProduct().catch(function (error) {
+          statusMessage("Could not create product: " + error.message, true);
+        });
+      });
+
+      document.getElementById("loadWorkspaceRulesBtn").addEventListener("click", exportWorkspaceRules);
+
       loadWorkspace();
     </script>
   </body>
