@@ -231,6 +231,20 @@ No attribute access, imports, comprehensions, lambdas, or arbitrary function cal
 - `configuration_states`: snapshots of evaluated draft configurations.
 - `specifications`: final submitted specs.
 - `frontend_enhancements`: admin backlog/visibility items used by the landing app.
+- `workspace_products`: product-level catalogs used by the modern visual rules workbench.
+- `workspace_categories`: hierarchical category + sub-category taxonomy per product.
+- `workspace_rules`: ordered rule cards with read-only/editable state and execution position.
+
+### Rules workspace API
+
+The Rules Engine UI now relies on workspace APIs for rich editing:
+
+- `GET /api/workspace` returns products with nested categories/sub-categories and sorted rules.
+- `POST/PUT/DELETE /api/workspace/products` manages product switching options.
+- `POST/PUT/DELETE /api/workspace/categories` manages categories and sub-categories.
+- `POST/PUT/DELETE /api/workspace/rules` manages rule cards.
+- `POST /api/workspace/rules/<id>/editable` toggles read-only vs editable mode.
+- `POST /api/workspace/rules/<id>/position` updates execution order while preserving backward compatibility in existing `rulesets` payload evaluation.
 
 ## 6. Recommended product-delivery workflow
 

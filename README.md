@@ -20,6 +20,9 @@ The implementation favors minimal dependencies, deterministic rules processing, 
 
 - Admin landing page with launch links and portfolio visibility for rulesets, front-end enhancements, and end-user configuration activity.
 - Ruleset CRUD-lite (create + list + edit).
+- Visual rules workspace with product switching, category/sub-category organization, and sortable execution order.
+- Rule cards default to read-only and can be toggled editable on click for safer authoring.
+- Browser-safe workspace rendering that avoids HTML injection patterns and uses standards-based DOM APIs compatible with Chrome, Firefox, Edge, and Safari.
 - Environment deployments (`dev`, `prod`, etc.) with active ruleset mapping.
 - Customer access control per environment via API key.
 - Config evaluation endpoint:
@@ -119,6 +122,21 @@ curl -X POST http://localhost:8002/api/evaluate \
     "environment": "dev",
     "configuration": {"quantity": 2, "base_price": 100, "discount": 0.1, "region": "NA"}
   }'
+```
+
+
+Rules workspace snapshot:
+
+```bash
+curl -s http://localhost:8001/api/workspace
+```
+
+Create a product in workspace:
+
+```bash
+curl -X POST http://localhost:8001/api/workspace/products \
+  -H 'content-type: application/json' \
+  -d '{"name": "Servers", "description": "Rack and blade portfolio"}'
 ```
 
 Optimize in rules engine:

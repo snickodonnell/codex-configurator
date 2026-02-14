@@ -153,6 +153,10 @@ def _is_logged_in() -> bool:
     return session.get("username") == ADMIN_USERNAME and session.get("role") == "admin"
 
 
+def _json_body() -> dict[str, Any]:
+    return request.get_json(force=True, silent=False) or {}
+
+
 def _configure_auth(app: Flask) -> None:
     app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret-change-me")
 
@@ -267,6 +271,220 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
             selected_pseudocode=selected_pseudocode,
             parse_error=request.args.get("error", ""),
         )
+
+    @app.get("/api/workspace")
+    def get_workspace() -> Any:
+        conn = connect(_db_path(app))
+        products = conn.execute(
+            "SELECT id, name, description FROM workspace_products ORDER BY name"
+        ).fetchall()
+        categories = conn.execute(
+            "SELECT id, product_id, name, parent_id, position FROM workspace_categories ORDER BY position, id"
+        ).fetchall()
+        rules = conn.execute(
+            """
+            SELECT id, product_id, category_id, subcategory_id, rule_type, target, expression, message, position, is_editable
+            FROM workspace_rules
+            ORDER BY position, id
+            """
+        ).fetchall()
+
+        categories_by_product: dict[int, list[dict[str, Any]]] = {}
+        for category in categories:
+            categories_by_product.setdefault(category["product_id"], []).append(dict(category))
+
+        rules_by_product: dict[int, list[dict[str, Any]]] = {}
+        for rule in rules:
+            rules_by_product.setdefault(rule["product_id"], []).append(dict(rule))
+
+        payload = []
+        for product in products:
+            product_categories = categories_by_product.get(product["id"], [])
+            top_level = [item for item in product_categories if item["parent_id"] is None]
+            subcategories = [item for item in product_categories if item["parent_id"] is not None]
+            sub_by_parent: dict[int, list[dict[str, Any]]] = {}
+            for sub in subcategories:
+                sub_by_parent.setdefault(sub["parent_id"], []).append(sub)
+
+            product_rules = rules_by_product.get(product["id"], [])
+            rules_by_bucket: dict[tuple[int, int | None], list[dict[str, Any]]] = {}
+            for rule in product_rules:
+                key = (int(rule["category_id"]), rule["subcategory_id"])
+                rules_by_bucket.setdefault(key, []).append(rule)
+
+            assembled_categories = []
+            for category in top_level:
+                category_id = int(category["id"])
+                assembled_sub = []
+                for sub in sorted(sub_by_parent.get(category_id, []), key=lambda item: (item["position"], item["id"])):
+                    assembled_sub.append(
+                        {
+                            **sub,
+                            "rules": rules_by_bucket.get((category_id, sub["id"]), []),
+                        }
+                    )
+                assembled_categories.append(
+                    {
+                        **category,
+                        "rules": rules_by_bucket.get((category_id, None), []),
+                        "subcategories": assembled_sub,
+                    }
+                )
+
+            payload.append({**dict(product), "categories": assembled_categories})
+
+        return jsonify({"products": payload})
+
+    @app.post("/api/workspace/products")
+    def create_workspace_product() -> Any:
+        body = _json_body()
+        name = str(body.get("name", "")).strip()
+        if not name:
+            return jsonify({"error": "name is required"}), 400
+        description = str(body.get("description", "")).strip()
+        conn = connect(_db_path(app))
+        with conn:
+            cursor = conn.execute(
+                "INSERT INTO workspace_products(name, description) VALUES (?, ?)",
+                (name, description),
+            )
+        return jsonify({"id": int(cursor.lastrowid), "name": name, "description": description}), 201
+
+    @app.put("/api/workspace/products/<int:product_id>")
+    def update_workspace_product(product_id: int) -> Any:
+        body = _json_body()
+        conn = connect(_db_path(app))
+        with conn:
+            conn.execute(
+                "UPDATE workspace_products SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (str(body.get("name", "")).strip() or f"Product {product_id}", str(body.get("description", "")).strip(), product_id),
+            )
+        return jsonify({"status": "ok"})
+
+    @app.delete("/api/workspace/products/<int:product_id>")
+    def delete_workspace_product(product_id: int) -> Any:
+        conn = connect(_db_path(app))
+        with conn:
+            conn.execute("DELETE FROM workspace_rules WHERE product_id = ?", (product_id,))
+            conn.execute("DELETE FROM workspace_categories WHERE product_id = ?", (product_id,))
+            conn.execute("DELETE FROM workspace_products WHERE id = ?", (product_id,))
+        return jsonify({"status": "deleted"})
+
+    @app.post("/api/workspace/categories")
+    def create_workspace_category() -> Any:
+        body = _json_body()
+        product_id = int(body["product_id"])
+        parent_id = body.get("parent_id")
+        name = str(body.get("name", "")).strip() or "Untitled"
+        position = int(body.get("position", 0))
+        conn = connect(_db_path(app))
+        with conn:
+            cursor = conn.execute(
+                "INSERT INTO workspace_categories(product_id, name, parent_id, position) VALUES (?, ?, ?, ?)",
+                (product_id, name, parent_id, position),
+            )
+        return jsonify({"id": int(cursor.lastrowid)}), 201
+
+    @app.put("/api/workspace/categories/<int:category_id>")
+    def update_workspace_category(category_id: int) -> Any:
+        body = _json_body()
+        conn = connect(_db_path(app))
+        with conn:
+            conn.execute(
+                "UPDATE workspace_categories SET name = ?, position = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (str(body.get("name", "")).strip() or "Untitled", int(body.get("position", 0)), category_id),
+            )
+        return jsonify({"status": "ok"})
+
+    @app.delete("/api/workspace/categories/<int:category_id>")
+    def delete_workspace_category(category_id: int) -> Any:
+        conn = connect(_db_path(app))
+        child_ids = [row["id"] for row in conn.execute("SELECT id FROM workspace_categories WHERE parent_id = ?", (category_id,))]
+        with conn:
+            conn.execute("DELETE FROM workspace_rules WHERE category_id = ?", (category_id,))
+            for child_id in child_ids:
+                conn.execute("DELETE FROM workspace_rules WHERE subcategory_id = ?", (child_id,))
+            if child_ids:
+                conn.executemany("DELETE FROM workspace_categories WHERE id = ?", [(child_id,) for child_id in child_ids])
+            conn.execute("DELETE FROM workspace_categories WHERE id = ?", (category_id,))
+        return jsonify({"status": "deleted"})
+
+    @app.post("/api/workspace/rules")
+    def create_workspace_rule() -> Any:
+        body = _json_body()
+        conn = connect(_db_path(app))
+        with conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO workspace_rules(product_id, category_id, subcategory_id, rule_type, target, expression, message, position, is_editable)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(body["product_id"]),
+                    int(body["category_id"]),
+                    body.get("subcategory_id"),
+                    str(body.get("rule_type", "constraint")),
+                    str(body.get("target", "")),
+                    str(body.get("expression", "1 == 1")),
+                    str(body.get("message", "")),
+                    int(body.get("position", 0)),
+                    0,
+                ),
+            )
+        return jsonify({"id": int(cursor.lastrowid)}), 201
+
+    @app.put("/api/workspace/rules/<int:rule_id>")
+    def update_workspace_rule(rule_id: int) -> Any:
+        body = _json_body()
+        conn = connect(_db_path(app))
+        with conn:
+            conn.execute(
+                """
+                UPDATE workspace_rules
+                SET rule_type = ?, target = ?, expression = ?, message = ?, position = ?, is_editable = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (
+                    str(body.get("rule_type", "constraint")),
+                    str(body.get("target", "")),
+                    str(body.get("expression", "1 == 1")),
+                    str(body.get("message", "")),
+                    int(body.get("position", 0)),
+                    1 if body.get("is_editable") else 0,
+                    rule_id,
+                ),
+            )
+        return jsonify({"status": "ok"})
+
+    @app.post("/api/workspace/rules/<int:rule_id>/editable")
+    def set_workspace_rule_editable(rule_id: int) -> Any:
+        body = _json_body()
+        conn = connect(_db_path(app))
+        with conn:
+            conn.execute(
+                "UPDATE workspace_rules SET is_editable = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (1 if bool(body.get("is_editable", True)) else 0, rule_id),
+            )
+        return jsonify({"status": "ok"})
+
+
+    @app.post("/api/workspace/rules/<int:rule_id>/position")
+    def update_workspace_rule_position(rule_id: int) -> Any:
+        body = _json_body()
+        conn = connect(_db_path(app))
+        with conn:
+            conn.execute(
+                "UPDATE workspace_rules SET position = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (int(body.get("position", 0)), rule_id),
+            )
+        return jsonify({"status": "ok"})
+
+    @app.delete("/api/workspace/rules/<int:rule_id>")
+    def delete_workspace_rule(rule_id: int) -> Any:
+        conn = connect(_db_path(app))
+        with conn:
+            conn.execute("DELETE FROM workspace_rules WHERE id = ?", (rule_id,))
+        return jsonify({"status": "deleted"})
 
     @app.post("/rulesets")
     def create_ruleset() -> Any:

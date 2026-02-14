@@ -346,3 +346,118 @@ def test_evaluate_persists_configuration_state(tmp_path) -> None:
     assert row["customer_id"] == "demo-customer"
     assert row["environment"] == "dev"
     assert json.loads(row["state"])["quantity"] == 2
+
+
+def test_workspace_api_supports_product_switching_and_rule_editability(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    app = create_rules_engine_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    created = client.post(
+        "/api/workspace/products",
+        json={"name": "Servers", "description": "Rack server rules"},
+    )
+    assert created.status_code == 201
+    product_id = created.get_json()["id"]
+
+    category = client.post(
+        "/api/workspace/categories",
+        json={"product_id": product_id, "name": "Availability", "position": 1},
+    )
+    assert category.status_code == 201
+    category_id = category.get_json()["id"]
+
+    rule = client.post(
+        "/api/workspace/rules",
+        json={
+            "product_id": product_id,
+            "category_id": category_id,
+            "rule_type": "constraint",
+            "expression": "quantity >= 2",
+            "message": "Need at least two nodes",
+            "position": 2,
+        },
+    )
+    assert rule.status_code == 201
+    rule_id = rule.get_json()["id"]
+
+    toggle = client.post(f"/api/workspace/rules/{rule_id}/editable", json={"is_editable": True})
+    assert toggle.status_code == 200
+
+    workspace = client.get("/api/workspace")
+    assert workspace.status_code == 200
+    payload = workspace.get_json()
+    server_product = next(product for product in payload["products"] if product["name"] == "Servers")
+    fetched_rule = server_product["categories"][0]["rules"][0]
+    assert fetched_rule["expression"] == "quantity >= 2"
+    assert fetched_rule["is_editable"] == 1
+
+
+def test_workspace_rule_position_update(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    app = create_rules_engine_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    workspace = client.get("/api/workspace").get_json()
+    product = workspace["products"][0]
+    category = product["categories"][0]
+    sub = category["subcategories"][0]
+
+    created = client.post(
+        "/api/workspace/rules",
+        json={
+            "product_id": product["id"],
+            "category_id": category["id"],
+            "subcategory_id": sub["id"],
+            "rule_type": "constraint",
+            "expression": "region == 'NA'",
+            "message": "North America only",
+            "position": 6,
+        },
+    )
+    assert created.status_code == 201
+    rule_id = created.get_json()["id"]
+
+    moved = client.post(f"/api/workspace/rules/{rule_id}/position", json={"position": 1})
+    assert moved.status_code == 200
+
+    refreshed = client.get("/api/workspace").get_json()
+    product_after = next(item for item in refreshed["products"] if item["id"] == product["id"])
+    sub_after = product_after["categories"][0]["subcategories"][0]
+    created_rule = next(item for item in sub_after["rules"] if item["id"] == rule_id)
+    assert created_rule["position"] == 1
+
+
+def test_workspace_delete_category_removes_child_categories_and_rules(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    app = create_rules_engine_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    workspace = client.get("/api/workspace").get_json()
+    product = workspace["products"][0]
+    category = product["categories"][0]
+    subcategory = category["subcategories"][0]
+
+    created = client.post(
+        "/api/workspace/rules",
+        json={
+            "product_id": product["id"],
+            "category_id": category["id"],
+            "subcategory_id": subcategory["id"],
+            "rule_type": "constraint",
+            "expression": "quantity <= 10",
+            "message": "Quantity cap",
+            "position": 2,
+        },
+    )
+    assert created.status_code == 201
+
+    deleted = client.delete(f"/api/workspace/categories/{category['id']}")
+    assert deleted.status_code == 200
+
+    refreshed = client.get("/api/workspace").get_json()
+    refreshed_product = next(item for item in refreshed["products"] if item["id"] == product["id"])
+    assert refreshed_product["categories"] == []
