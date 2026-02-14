@@ -940,6 +940,65 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
         ).fetchall()
         return [dict(row) for row in rows]
 
+
+    def _include_meta_flag(payload: dict[str, Any]) -> bool:
+        candidate = request.args.get("include_meta")
+        if candidate is None:
+            candidate = payload.get("include_meta")
+        if isinstance(candidate, bool):
+            return candidate
+        if isinstance(candidate, str):
+            return candidate.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(candidate)
+
+    def _serialize_violations(violations: list[Any]) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]]]:
+        public_violations: list[dict[str, Any]] = []
+        violation_codes: list[str] = []
+        debug_violations: list[dict[str, Any]] = []
+
+        for violation in violations:
+            code = str(getattr(violation, "code"))
+            recommended_severity = str(getattr(violation, "recommended_severity"))
+            rule = dict(getattr(violation, "rule"))
+            meta = dict(getattr(violation, "meta"))
+
+            public_violations.append(
+                {
+                    "code": code,
+                    "recommended_severity": recommended_severity,
+                    "rule": rule,
+                }
+            )
+            violation_codes.append(code)
+            debug_violations.append(
+                {
+                    "code": code,
+                    "recommended_severity": recommended_severity,
+                    "rule": rule,
+                    "meta": meta,
+                }
+            )
+
+        return public_violations, violation_codes, debug_violations
+
+    def _log_constraint_violations(
+        violations_debug: list[dict[str, Any]],
+        *,
+        environment: str | None = None,
+        customer_id: str | None = None,
+    ) -> None:
+        for violation in violations_debug:
+            app.logger.info(
+                "constraint_violation",
+                extra={
+                    "code": violation["code"],
+                    "recommended_severity": violation["recommended_severity"],
+                    "meta": violation["meta"],
+                    "environment": environment,
+                    "customer_id": customer_id,
+                },
+            )
+
     def _project_payload(conn: Any, project_id: int) -> dict[str, Any] | None:
         project = conn.execute(
             """
@@ -1214,8 +1273,15 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
             abort(403)
 
         configuration = payload.get("configuration", {})
+        include_meta = _include_meta_flag(payload)
         deployed = _load_deployed_ruleset(conn, environment)
         evaluated = evaluate_rules(deployed["rules"], configuration)
+        public_violations, violation_codes, violations_debug = _serialize_violations(evaluated.violations)
+        _log_constraint_violations(
+            violations_debug,
+            environment=str(environment),
+            customer_id=str(customer_id),
+        )
 
         context = {**evaluated.resolved_configuration, **evaluated.calculations}
         studio_violations: list[dict[str, Any]] = []
@@ -1269,17 +1335,20 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
             state=evaluated.resolved_configuration,
         )
 
-        return jsonify(
-            {
-                "valid": evaluated.valid,
-                "calculations": evaluated.calculations,
-                "violations": evaluated.violations,
-                "studio_violations": studio_violations,
-                "resolved_configuration": evaluated.resolved_configuration,
-                "configuration_status": status,
-                "project_status": project_status,
-            }
-        )
+        response = {
+            "valid": evaluated.valid,
+            "calculations": evaluated.calculations,
+            "violations": public_violations,
+            "violation_codes": violation_codes,
+            "studio_violations": studio_violations,
+            "resolved_configuration": evaluated.resolved_configuration,
+            "configuration_status": status,
+            "project_status": project_status,
+        }
+        if include_meta:
+            response["violations_debug"] = violations_debug
+
+        return jsonify(response)
 
     @app.get("/api/configuration-memo")
     def configuration_memo() -> Any:
@@ -1357,15 +1426,23 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
             abort(403)
 
         configuration = payload["configuration"]
+        include_meta = _include_meta_flag(payload)
         deployed = _load_deployed_ruleset(conn, environment)
         ruleset = deployed["rules"]
         evaluated = evaluate_rules(ruleset, configuration)
+        public_violations, violation_codes, violations_debug = _serialize_violations(evaluated.violations)
+        _log_constraint_violations(
+            violations_debug,
+            environment=str(environment),
+            customer_id=str(customer_id),
+        )
         memo_schema = _build_configuration_memo_schema(ruleset, deployed)
 
         response = {
             "valid": evaluated.valid,
             "calculations": evaluated.calculations,
-            "violations": evaluated.violations,
+            "violations": public_violations,
+            "violation_codes": violation_codes,
             "resolved_configuration": evaluated.resolved_configuration,
             "configuration_memo": {
                 "schema": memo_schema,
@@ -1417,6 +1494,8 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
         )
 
         response["configuration_memo"]["id"] = memo_id
+        if include_meta:
+            response["violations_debug"] = violations_debug
         return jsonify(response)
 
     @app.post("/api/submit")
