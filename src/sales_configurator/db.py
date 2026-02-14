@@ -92,6 +92,34 @@ CREATE TABLE IF NOT EXISTS workspace_categories (
     FOREIGN KEY (parent_id) REFERENCES workspace_categories(id)
 );
 
+CREATE TABLE IF NOT EXISTS ui_parameter_configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parameter_name TEXT NOT NULL UNIQUE,
+    display_label TEXT NOT NULL,
+    help_text TEXT NOT NULL DEFAULT '',
+    control_type TEXT NOT NULL DEFAULT 'text',
+    display_style TEXT NOT NULL DEFAULT 'classic',
+    min_value REAL,
+    max_value REAL,
+    step_value REAL,
+    placeholder TEXT NOT NULL DEFAULT '',
+    image_url TEXT NOT NULL DEFAULT '',
+    value_image_mode TEXT NOT NULL DEFAULT 'none',
+    is_required INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ui_parameter_options (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parameter_name TEXT NOT NULL,
+    option_value TEXT NOT NULL,
+    option_label TEXT NOT NULL,
+    option_order INTEGER NOT NULL DEFAULT 0,
+    image_url TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (parameter_name) REFERENCES ui_parameter_configs(parameter_name)
+);
+
 CREATE TABLE IF NOT EXISTS workspace_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     product_id INTEGER NOT NULL,
@@ -128,6 +156,8 @@ def init_db(db_path: str | Path) -> None:
         seed_default_access(conn)
         seed_default_enhancements(conn)
         seed_workspace_defaults(conn)
+        migrate_ui_schema(conn)
+        seed_default_ui_schema(conn)
 
 
 def migrate_rulesets_schema(conn: sqlite3.Connection) -> None:
@@ -235,6 +265,49 @@ def seed_workspace_defaults(conn: sqlite3.Connection) -> None:
             0,
         ),
     )
+
+
+def migrate_ui_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ui_parameter_options_lookup
+        ON ui_parameter_options(parameter_name, option_order)
+        """
+    )
+
+
+def seed_default_ui_schema(conn: sqlite3.Connection) -> None:
+    row = conn.execute("SELECT id FROM ui_parameter_configs LIMIT 1").fetchone()
+    if row is not None:
+        return
+
+    defaults = [
+        ("quantity", "Order Quantity", "Units requested by the customer", "slider", "card", 1, 20, 1, "", "", "none", 1),
+        ("base_price", "Base Price", "Starting unit price before discounts", "slider", "accent", 50, 500, 10, "", "", "none", 1),
+        ("discount", "Discount", "Promotional discount", "radio_boolean", "pill", 0, 1, 0.05, "", "", "none", 0),
+        ("region", "Sales Region", "Primary shipping region", "dropdown", "classic", None, None, None, "Select region", "", "value", 1),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO ui_parameter_configs(
+            parameter_name, display_label, help_text, control_type, display_style,
+            min_value, max_value, step_value, placeholder, image_url, value_image_mode, is_required
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        defaults,
+    )
+
+    conn.executemany(
+        "INSERT INTO ui_parameter_options(parameter_name, option_value, option_label, option_order, image_url) VALUES (?, ?, ?, ?, ?)",
+        [
+            ("region", "NA", "North America", 1, ""),
+            ("region", "EU", "Europe", 2, ""),
+            ("region", "APAC", "Asia Pacific", 3, ""),
+            ("discount", "0", "No", 1, ""),
+            ("discount", "1", "Yes", 2, ""),
+        ],
+    )
+
 
 
 def json_dumps(payload: dict[str, Any]) -> str:

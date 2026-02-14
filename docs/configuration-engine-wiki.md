@@ -6,9 +6,10 @@ This wiki explains how to build and operate a product configuration workflow in 
 
 The MVP is split into three Flask applications that share a SQLite database:
 
-- **Admin Landing App** (`landing`) for visibility and launch links.
-- **Rules Engine App** (`rules`) for authoring and deploying rulesets.
-- **Configurator App** (`configurator`) for evaluating and submitting customer configurations.
+- **Launchpad Orbit** (`landing`) for visibility and launch links.
+- **RuleCanvas** (`rules`) for authoring and deploying rulesets.
+- **Experience Studio** (`experience`) for mapping parameters to UI controls/styles/images.
+- **ShopFloor Configurator** (`configurator`) for evaluating and submitting customer configurations.
 
 All services initialize the same schema and can point to the same DB file with `--db` / `RULES_DB_PATH`.
 
@@ -287,3 +288,12 @@ pytest
 - OpenAPI contracts for all JSON endpoints.
 - Better auth (OIDC/SAML) and scoped API tokens.
 - Asynchronous optimization jobs for large domains.
+
+
+## 8. Experience Studio boundary
+
+Experience Studio controls only front-end presentation metadata (control type, visual style, option lists, images).
+
+- It **does not** execute or mutate core rules logic.
+- Rule truth/evaluation remains in deployed rulesets + `evaluate_rules`.
+- ShopFloor consumes mappings via `/api/ui-schema` and then calls existing `/api/evaluate` and `/api/submit` APIs.

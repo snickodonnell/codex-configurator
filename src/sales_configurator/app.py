@@ -79,6 +79,8 @@ DEFAULT_RULESET = {
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin"
+UX_EDITOR_USERNAME = "ux-admin"
+UX_EDITOR_PASSWORD = "ux-admin"
 
 
 def _db_path(app: Flask) -> Path:
@@ -150,7 +152,15 @@ def _authorize(conn: Any, customer_id: str, api_key: str, environment: str) -> b
 
 
 def _is_logged_in() -> bool:
-    return session.get("username") == ADMIN_USERNAME and session.get("role") == "admin"
+    return bool(session.get("username") and session.get("role"))
+
+
+def _is_admin() -> bool:
+    return session.get("role") == "admin"
+
+
+def _is_frontend_editor() -> bool:
+    return session.get("role") in {"admin", "frontend_editor"}
 
 
 def _json_body() -> dict[str, Any]:
@@ -180,6 +190,10 @@ def _configure_auth(app: Flask) -> None:
                 session["username"] = ADMIN_USERNAME
                 session["role"] = "admin"
                 return redirect(url_for("index"))
+            if username == UX_EDITOR_USERNAME and password == UX_EDITOR_PASSWORD:
+                session["username"] = UX_EDITOR_USERNAME
+                session["role"] = "frontend_editor"
+                return redirect(url_for("index"))
             error = "Invalid credentials"
         return render_template("login.html", error=error)
 
@@ -193,10 +207,21 @@ def create_landing_app(database_path: str | None = None) -> Flask:
     app = Flask(__name__, template_folder="templates")
     app.config["DATABASE_PATH"] = database_path or os.environ.get("RULES_DB_PATH", "./data.db")
     app.config["RULES_ENGINE_URL"] = os.environ.get("RULES_ENGINE_URL", "http://localhost:8001")
-    app.config["DESIGN_URL"] = os.environ.get("DESIGN_URL", "http://localhost:8002")
-    app.config["END_USER_URL"] = os.environ.get("END_USER_URL", "http://localhost:8002")
+    app.config["RULE_CANVAS_URL"] = os.environ.get("RULE_CANVAS_URL", "http://localhost:8001")
+    app.config["EXPERIENCE_STUDIO_URL"] = os.environ.get("EXPERIENCE_STUDIO_URL", "http://localhost:8003")
+    app.config["SHOP_FLOOR_URL"] = os.environ.get("SHOP_FLOOR_URL", "http://localhost:8002")
     init_db(_db_path(app))
     _configure_auth(app)
+
+    @app.before_request
+    def require_admin_role() -> Any:
+        if request.endpoint in {"login", "logout", "static"}:
+            return None
+        if _is_admin():
+            return None
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "admin role required"}), 403
+        return "Forbidden", 403
 
     @app.get("/")
     def index() -> str:
@@ -216,8 +241,9 @@ def create_landing_app(database_path: str | None = None) -> Flask:
             enhancements=enhancements,
             configurations=configurations,
             rules_engine_url=app.config["RULES_ENGINE_URL"],
-            design_url=app.config["DESIGN_URL"],
-            end_user_url=app.config["END_USER_URL"],
+            rule_canvas_url=app.config["RULE_CANVAS_URL"],
+            experience_studio_url=app.config["EXPERIENCE_STUDIO_URL"],
+            shop_floor_url=app.config["SHOP_FLOOR_URL"],
         )
 
     @app.post("/enhancements")
@@ -241,6 +267,16 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
     app.config["DATABASE_PATH"] = database_path or os.environ.get("RULES_DB_PATH", "./data.db")
     init_db(_db_path(app))
     _configure_auth(app)
+
+    @app.before_request
+    def require_admin_role() -> Any:
+        if request.endpoint in {"login", "logout", "static"}:
+            return None
+        if _is_admin():
+            return None
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "admin role required"}), 403
+        return "Forbidden", 403
 
     @app.get("/")
     def index() -> str:
@@ -585,6 +621,16 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
     init_db(_db_path(app))
     _configure_auth(app)
 
+    @app.before_request
+    def require_admin_role() -> Any:
+        if request.endpoint in {"login", "logout", "static"}:
+            return None
+        if _is_admin():
+            return None
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "admin role required"}), 403
+        return "Forbidden", 403
+
     @app.get("/")
     def index() -> str:
         return render_template("configurator/index.html")
@@ -596,6 +642,50 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
         deployed = _load_deployed_ruleset(conn, environment)
         schema = _build_configuration_memo_schema(deployed["rules"], deployed)
         return jsonify(schema)
+
+    @app.get("/api/ui-schema")
+    def ui_schema() -> Any:
+        environment = request.args.get("environment", "dev")
+        conn = connect(_db_path(app))
+        deployed = _load_deployed_ruleset(conn, environment)
+        schema = _build_configuration_memo_schema(deployed["rules"], deployed)
+        rows = conn.execute(
+            """
+            SELECT parameter_name, display_label, help_text, control_type, display_style,
+                   min_value, max_value, step_value, placeholder, image_url, value_image_mode, is_required
+            FROM ui_parameter_configs
+            ORDER BY parameter_name
+            """
+        ).fetchall()
+        options = conn.execute(
+            "SELECT parameter_name, option_value, option_label, option_order, image_url FROM ui_parameter_options ORDER BY parameter_name, option_order, id"
+        ).fetchall()
+
+        by_name = {row["parameter_name"]: dict(row) for row in rows}
+        options_by_name: dict[str, list[dict[str, Any]]] = {}
+        for row in options:
+            options_by_name.setdefault(row["parameter_name"], []).append(dict(row))
+
+        controls = []
+        for parameter in schema["parameters"]:
+            configured = by_name.get(parameter["name"], {})
+            controls.append({
+                "parameter_name": parameter["name"],
+                "display_label": configured.get("display_label") or parameter["label"],
+                "help_text": configured.get("help_text") or "",
+                "control_type": configured.get("control_type") or ("number" if parameter["data_type"] == "number" else "text"),
+                "display_style": configured.get("display_style") or "classic",
+                "min_value": configured.get("min_value"),
+                "max_value": configured.get("max_value"),
+                "step_value": configured.get("step_value"),
+                "placeholder": configured.get("placeholder") or "",
+                "image_url": configured.get("image_url") or "",
+                "value_image_mode": configured.get("value_image_mode") or "none",
+                "is_required": configured.get("is_required", 0),
+                "options": options_by_name.get(parameter["name"], []),
+            })
+
+        return jsonify({"schema": schema, "controls": controls})
 
     @app.post("/api/evaluate")
     def evaluate() -> Any:
@@ -708,5 +798,107 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
                 ),
             )
         return jsonify({"status": "submitted"})
+
+    return app
+
+
+def create_experience_studio_app(database_path: str | None = None) -> Flask:
+    app = Flask(__name__, template_folder="templates")
+    app.config["DATABASE_PATH"] = database_path or os.environ.get("RULES_DB_PATH", "./data.db")
+    init_db(_db_path(app))
+    _configure_auth(app)
+
+    @app.before_request
+    def require_editor_role() -> Any:
+        if request.endpoint in {"login", "logout", "static"}:
+            return None
+        if _is_frontend_editor():
+            return None
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "frontend editor role required"}), 403
+        return "Forbidden", 403
+
+    @app.get("/")
+    def index() -> str:
+        return render_template("front_end_editor/index.html")
+
+    @app.get("/api/mappings")
+    def mappings() -> Any:
+        conn = connect(_db_path(app))
+        rows = conn.execute(
+            """
+            SELECT id, parameter_name, display_label, help_text, control_type, display_style,
+                   min_value, max_value, step_value, placeholder, image_url, value_image_mode, is_required
+            FROM ui_parameter_configs
+            ORDER BY parameter_name
+            """
+        ).fetchall()
+        option_rows = conn.execute(
+            "SELECT id, parameter_name, option_value, option_label, option_order, image_url FROM ui_parameter_options ORDER BY parameter_name, option_order, id"
+        ).fetchall()
+        options_by_name: dict[str, list[dict[str, Any]]] = {}
+        for row in option_rows:
+            options_by_name.setdefault(row["parameter_name"], []).append(dict(row))
+        return jsonify({"mappings": [{**dict(row), "options": options_by_name.get(row["parameter_name"], [])} for row in rows]})
+
+    @app.post("/api/mappings")
+    def save_mapping() -> Any:
+        body = _json_body()
+        parameter_name = str(body.get("parameter_name", "")).strip()
+        if not parameter_name:
+            return jsonify({"error": "parameter_name is required"}), 400
+        conn = connect(_db_path(app))
+        with conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO ui_parameter_configs(
+                    parameter_name, display_label, help_text, control_type, display_style,
+                    min_value, max_value, step_value, placeholder, image_url, value_image_mode, is_required
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(parameter_name) DO UPDATE SET
+                    display_label = excluded.display_label,
+                    help_text = excluded.help_text,
+                    control_type = excluded.control_type,
+                    display_style = excluded.display_style,
+                    min_value = excluded.min_value,
+                    max_value = excluded.max_value,
+                    step_value = excluded.step_value,
+                    placeholder = excluded.placeholder,
+                    image_url = excluded.image_url,
+                    value_image_mode = excluded.value_image_mode,
+                    is_required = excluded.is_required,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    parameter_name,
+                    str(body.get("display_label", "")).strip() or parameter_name,
+                    str(body.get("help_text", "")).strip(),
+                    str(body.get("control_type", "text")).strip(),
+                    str(body.get("display_style", "classic")).strip(),
+                    body.get("min_value"),
+                    body.get("max_value"),
+                    body.get("step_value"),
+                    str(body.get("placeholder", "")).strip(),
+                    str(body.get("image_url", "")).strip(),
+                    str(body.get("value_image_mode", "none")).strip(),
+                    1 if bool(body.get("is_required")) else 0,
+                ),
+            )
+            conn.execute("DELETE FROM ui_parameter_options WHERE parameter_name = ?", (parameter_name,))
+            option_rows = []
+            for index, option in enumerate(body.get("options", [])):
+                option_rows.append((
+                    parameter_name,
+                    str(option.get("value", "")).strip(),
+                    str(option.get("label", "")).strip() or str(option.get("value", "")).strip(),
+                    int(option.get("order", index)),
+                    str(option.get("image_url", "")).strip(),
+                ))
+            if option_rows:
+                conn.executemany(
+                    "INSERT INTO ui_parameter_options(parameter_name, option_value, option_label, option_order, image_url) VALUES (?, ?, ?, ?, ?)",
+                    option_rows,
+                )
+        return jsonify({"status": "ok", "id": int(cursor.lastrowid) if cursor.lastrowid else None})
 
     return app

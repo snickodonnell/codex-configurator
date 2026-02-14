@@ -1,6 +1,11 @@
 import json
 
-from sales_configurator.app import create_configurator_app, create_landing_app, create_rules_engine_app
+from sales_configurator.app import (
+    create_configurator_app,
+    create_experience_studio_app,
+    create_landing_app,
+    create_rules_engine_app,
+)
 from sales_configurator.db import connect
 
 
@@ -461,3 +466,67 @@ def test_workspace_delete_category_removes_child_categories_and_rules(tmp_path) 
     refreshed = client.get("/api/workspace").get_json()
     refreshed_product = next(item for item in refreshed["products"] if item["id"] == product["id"])
     assert refreshed_product["categories"] == []
+
+
+def login_ux(client) -> None:
+    response = client.post("/login", data={"username": "ux-admin", "password": "ux-admin"})
+    assert response.status_code == 302
+
+
+def test_experience_studio_requires_frontend_role_or_admin(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    app = create_experience_studio_app(str(db))
+    client = app.test_client()
+
+    response = client.get("/")
+    assert response.status_code == 302
+
+    login_ux(client)
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "Experience Studio" in page.get_data(as_text=True)
+
+
+def test_experience_mapping_save_and_configurator_ui_schema(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    studio = create_experience_studio_app(str(db))
+    studio_client = studio.test_client()
+    login_ux(studio_client)
+
+    saved = studio_client.post(
+        "/api/mappings",
+        json={
+            "parameter_name": "region",
+            "display_label": "Preferred Region",
+            "control_type": "button_group",
+            "display_style": "tile",
+            "help_text": "Choose deployment area",
+            "value_image_mode": "value",
+            "options": [
+                {"value": "NA", "label": "North America", "image_url": "https://example.com/na.png", "order": 1},
+                {"value": "EU", "label": "Europe", "image_url": "https://example.com/eu.png", "order": 2},
+            ],
+        },
+    )
+    assert saved.status_code == 200
+
+    configurator = create_configurator_app(str(db))
+    config_client = configurator.test_client()
+    login(config_client)
+    schema = config_client.get("/api/ui-schema?environment=dev")
+    assert schema.status_code == 200
+    body = schema.get_json()
+    control = next(item for item in body["controls"] if item["parameter_name"] == "region")
+    assert control["display_label"] == "Preferred Region"
+    assert control["control_type"] == "button_group"
+    assert len(control["options"]) == 2
+
+
+def test_non_admin_cannot_access_rules_engine(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    app = create_rules_engine_app(str(db))
+    client = app.test_client()
+    login_ux(client)
+
+    response = client.get("/")
+    assert response.status_code == 403

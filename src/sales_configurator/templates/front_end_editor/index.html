@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Experience Studio</title>
+    <style>
+      body{font-family:Arial,sans-serif;margin:1.5rem;background:#f5f7ff}
+      .wrap{max-width:1200px;margin:0 auto}
+      .card{background:#fff;border:1px solid #d9def0;border-radius:10px;padding:1rem;margin-bottom:1rem}
+      .row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.7rem}
+      label{font-size:.92rem;display:flex;flex-direction:column;gap:.25rem}
+      input,select,textarea{padding:.45rem;border:1px solid #ccd4ea;border-radius:8px}
+      textarea{min-height:72px}
+      button{padding:.45rem .8rem;border:1px solid #5564d8;border-radius:8px;background:#5564d8;color:#fff}
+      table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:.45rem;text-align:left}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Experience Studio</h1>
+      <p>Flexibly map rules parameters into customer-facing controls without changing evaluation logic.</p>
+      <p><a href="http://localhost:8000">Back to Launchpad Orbit</a></p>
+      <form method="post" action="/logout"><button type="submit">Logout</button></form>
+
+      <div class="card">
+        <h2>Parameter Mapping Editor</h2>
+        <div class="row">
+          <label>Parameter Name<input id="parameter_name" placeholder="quantity" /></label>
+          <label>Display Label<input id="display_label" placeholder="Order Quantity" /></label>
+          <label>Control Type
+            <select id="control_type">
+              <option value="text">Text Input</option>
+              <option value="number">Number Input</option>
+              <option value="radio_boolean">Radio Yes/No</option>
+              <option value="slider">Slider</option>
+              <option value="dropdown">Dropdown</option>
+              <option value="button_group">Toggle Button Group</option>
+            </select>
+          </label>
+          <label>Display Style
+            <select id="display_style">
+              <option value="classic">Classic</option>
+              <option value="card">Card</option>
+              <option value="accent">Accent</option>
+              <option value="pill">Pill</option>
+              <option value="tile">Tile</option>
+            </select>
+          </label>
+          <label>Min Value<input id="min_value" type="number" step="0.01" /></label>
+          <label>Max Value<input id="max_value" type="number" step="0.01" /></label>
+          <label>Step<input id="step_value" type="number" step="0.01" /></label>
+          <label>Placeholder<input id="placeholder" /></label>
+          <label>Parameter Image URL<input id="image_url" placeholder="https://..." /></label>
+          <label>Value Image Mode
+            <select id="value_image_mode">
+              <option value="none">No value images</option>
+              <option value="value">Show value images</option>
+            </select>
+          </label>
+        </div>
+        <label>Help Text<textarea id="help_text"></textarea></label>
+        <label><input type="checkbox" id="is_required" /> Force required in UI</label>
+        <label>Options (one per line: value|label|image-url)<textarea id="options"></textarea></label>
+        <button type="button" id="save">Save Mapping</button>
+        <p id="status"></p>
+      </div>
+
+      <div class="card">
+        <h2>Saved mappings</h2>
+        <table>
+          <thead><tr><th>Parameter</th><th>Label</th><th>Control</th><th>Style</th><th>Options</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+    <script>
+      function parseOptions(raw){
+        return raw.split('\n').map((line, index)=>{
+          const parts = line.split('|').map(x=>x.trim());
+          if(!parts[0]) return null;
+          return {value: parts[0], label: parts[1] || parts[0], image_url: parts[2] || '', order: index + 1};
+        }).filter(Boolean);
+      }
+
+      async function refresh(){
+        const res = await fetch('/api/mappings');
+        const body = await res.json();
+        const rows = document.getElementById('rows');
+        rows.innerHTML = '';
+        body.mappings.forEach((mapping)=>{
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${mapping.parameter_name}</td><td>${mapping.display_label}</td><td>${mapping.control_type}</td><td>${mapping.display_style}</td><td>${mapping.options.length}</td>`;
+          rows.appendChild(tr);
+        });
+      }
+
+      document.getElementById('save').onclick = async ()=>{
+        const payload = {
+          parameter_name: document.getElementById('parameter_name').value,
+          display_label: document.getElementById('display_label').value,
+          control_type: document.getElementById('control_type').value,
+          display_style: document.getElementById('display_style').value,
+          min_value: document.getElementById('min_value').value || null,
+          max_value: document.getElementById('max_value').value || null,
+          step_value: document.getElementById('step_value').value || null,
+          placeholder: document.getElementById('placeholder').value,
+          image_url: document.getElementById('image_url').value,
+          value_image_mode: document.getElementById('value_image_mode').value,
+          help_text: document.getElementById('help_text').value,
+          is_required: document.getElementById('is_required').checked,
+          options: parseOptions(document.getElementById('options').value)
+        };
+        const res = await fetch('/api/mappings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+        document.getElementById('status').textContent = res.ok ? 'Saved.' : 'Failed to save.';
+        await refresh();
+      };
+
+      refresh();
+    </script>
+  </body>
+</html>
