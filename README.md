@@ -54,6 +54,27 @@ ShopFloor consumes the active deployed ruleset + matching studio mappings via:
 
 Core rules logic remains unchanged and still executes through `evaluate_rules`.
 
+
+## RuleCanvas DSL quick reference
+
+Constraint suffixes are reason codes (not human-readable messages):
+
+```text
+DEFAULT discount = 0.05
+DEFAULT tier WHEN quantity >= 10 = "bulk"
+CALC total_price = base_price * quantity * (1 - discount)
+FUNCTION margin(price, cost) = price - cost
+CONSTRAINT quantity >= 1 :: ERR_QUANTITY_REQUIRED
+CONSTRAINT discount <= 0.2
+```
+
+If a `CONSTRAINT` omits `:: CODE`, the engine applies `ERR_CONSTRAINT_FAILED`.
+
+## Violation response shape
+
+`violations` is a list of objects (not `list[str]`). Each item includes `code`, `recommended_severity`, and `rule`.
+For convenience, `violation_codes` is also returned as a list of strings.
+
 ## Runtime safety and observability
 
 - API routes now use a shared error policy:

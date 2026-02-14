@@ -63,7 +63,7 @@
                 <input name="subcategory" value="{{ selected_ruleset.subcategory if selected_ruleset else 'discounts' }}" placeholder="Subcategory" />
               </div>
               <p class="muted">Rules DSL</p>
-              <textarea name="pseudo_rules" id="pseudo_rules">{{ selected_pseudocode if selected_pseudocode else "DEFAULT discount = 0.05\nCONSTRAINT quantity >= 1 :: Quantity must be at least 1\nCALC total_price = base_price * quantity * (1 - discount)" }}</textarea>
+              <textarea name="pseudo_rules" id="pseudo_rules">{{ selected_pseudocode if selected_pseudocode else "DEFAULT discount = 0.05\nCONSTRAINT quantity >= 1 :: ERR_QUANTITY_REQUIRED\nCALC total_price = base_price * quantity * (1 - discount)" }}</textarea>
               <details><summary>Raw JSON payload</summary><textarea name="payload">{{ selected_ruleset.payload if selected_ruleset else '' }}</textarea></details>
               <div class="row" style="margin-top:.6rem">
                 <button id="loadWorkspaceRulesBtn" type="button">Load from workspace</button>
@@ -202,7 +202,7 @@
 
         var message = document.createElement("input");
         message.id = "msg-" + rule.id;
-        message.placeholder = "message (for constraints)";
+        message.placeholder = "reason code (for constraints)";
         message.value = toText(rule.message);
         message.style.gridColumn = "span 2";
 
@@ -408,7 +408,7 @@
             subcategory_id: subcategoryId,
             rule_type: "constraint",
             expression: "quantity >= 1",
-            message: "Required",
+            message: "ERR_REQUIRED",
             position: 99
           })
         });
@@ -468,7 +468,7 @@
             } else if (rule.rule_type === "default") {
               lines.push("DEFAULT " + (rule.target || "field") + " = " + rule.expression);
             } else {
-              lines.push("CONSTRAINT " + rule.expression + " :: " + (rule.message || "Rule violation"));
+              lines.push("CONSTRAINT " + rule.expression + " :: " + (rule.message || "ERR_CONSTRAINT_FAILED"));
             }
           });
         });

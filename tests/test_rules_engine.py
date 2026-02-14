@@ -223,14 +223,14 @@ def test_parse_ruleset_pseudocode() -> None:
         """
         DEFAULT discount = 0.05
         DEFAULT region WHEN country == 'DE' = 'EU'
-        CONSTRAINT quantity >= 1 :: Quantity must be at least 1
+        CONSTRAINT quantity >= 1 :: ERR_QTY_MIN
         CALC total = base_price * quantity * (1-discount)
         FUNCTION margin(price,cost) = price-cost
         """
     )
     assert parsed["default_values"][0]["name"] == "discount"
     assert parsed["default_values"][1]["rules"][0]["condition"] == "country == 'DE'"
-    assert parsed["constraints"][0]["reason_code"] == "Quantity must be at least 1"
+    assert parsed["constraints"][0]["reason_code"] == "ERR_QTY_MIN"
     assert parsed["calculations"][0]["name"] == "total"
     assert parsed["custom_functions"][0]["name"] == "margin"
 
@@ -271,10 +271,78 @@ def test_rule_engine_can_be_reused_for_multiple_evaluations() -> None:
     assert second.calculations["total"] == 18
 
 
+
+
+def test_parse_ruleset_pseudocode_rejects_invalid_reason_code() -> None:
+    with pytest.raises(RulesParseError, match="line 1: invalid reason code"):
+        parse_ruleset_pseudocode("CONSTRAINT quantity >= 1 :: quantity must be at least 1")
+
+
+def test_parse_ruleset_pseudocode_reports_missing_constraint_expression() -> None:
+    with pytest.raises(RulesParseError, match="line 1: CONSTRAINT requires an expression"):
+        parse_ruleset_pseudocode("CONSTRAINT")
+
+
+def test_parse_ruleset_pseudocode_reports_missing_calc_formula() -> None:
+    with pytest.raises(RulesParseError, match="line 1: CALC requires a formula after '='"):
+        parse_ruleset_pseudocode("CALC total =")
+
+
+def test_ruleset_to_pseudocode_uses_default_reason_for_non_code_messages() -> None:
+    pseudo = ruleset_to_pseudocode({"constraints": [{"expression": "quantity >= 1", "message": "Quantity required"}]})
+    assert pseudo == "CONSTRAINT quantity >= 1 :: ERR_CONSTRAINT_FAILED"
 def test_parse_ruleset_pseudocode_constraint_default_reason_code() -> None:
     parsed = parse_ruleset_pseudocode("CONSTRAINT quantity >= 1")
     assert parsed["constraints"][0]["reason_code"] == "ERR_CONSTRAINT_FAILED"
 
+
+
+def test_constraint_violation_metadata_includes_safe_snapshot_and_rule_location() -> None:
+    ruleset = parse_ruleset_pseudocode(
+        """
+        CONSTRAINT quantity >= min_qty :: ERR_QTY_MIN
+        CONSTRAINT api_key == 'x' :: ERR_API_KEY
+        """
+    )
+    result = evaluate_rules(ruleset, {"quantity": 1, "min_qty": 2, "api_key": "super-secret-token"})
+
+    assert result.valid is False
+    assert len(result.violations) == 2
+
+    first = result.violations[0].meta
+    assert first["expression_raw"] == "quantity >= min_qty"
+    assert first["referenced_variables"] == ["min_qty", "quantity"]
+    assert first["snapshot"] == {"min_qty": 2, "quantity": 1}
+    assert first["evaluated_to"] is False
+    assert first["rule_index"] == 1
+    assert first["line_number"] == 2
+
+    second = result.violations[1].meta
+    assert second["snapshot"]["api_key"] == "<redacted>"
+
+
+
+def test_constraint_recommended_severity_is_block_biased() -> None:
+    ruleset = {
+        "constraints": [
+            {"expression": "quantity >= 1", "reason_code": "ERR_QTY", "recommended_severity": "INFO"},
+            {"expression": "price > 0", "reason_code": "ERR_PRICE", "recommended_severity": "nonsense"},
+        ],
+        "calculations": [],
+    }
+    result = evaluate_rules(ruleset, {"quantity": 0, "price": 0})
+
+    assert [item.recommended_severity for item in result.violations] == ["WARN", "BLOCK"]
+    assert result.violations[0].meta["severity"] == {
+        "recommended": "WARN",
+        "source": "rules_engine",
+        "overrideable_by": "experience_studio",
+    }
+
+def test_constraint_violation_metadata_sanitizes_complex_objects() -> None:
+    ruleset = {"constraints": [{"expression": "x == 1", "reason_code": "ERR_X"}], "calculations": []}
+    result = evaluate_rules(ruleset, {"x": object()})
+    assert result.violations[0].meta["snapshot"]["x"].startswith("<object type=")
 
 def test_extract_expression_variables_for_constraint_metadata() -> None:
     variables = extract_expression_variables("quantity >= min_qty and discount <= max_discount")

@@ -176,7 +176,7 @@ def test_ruleset_create_from_pseudocode(tmp_path) -> None:
             "category": "availability",
             "subcategory": "stock",
             "version": "1",
-            "pseudo_rules": "DEFAULT discount = 0.05\nCONSTRAINT quantity >= 1 :: Quantity required\nCALC total = base_price * quantity * (1-discount)",
+            "pseudo_rules": "DEFAULT discount = 0.05\nCONSTRAINT quantity >= 1 :: ERR_QUANTITY_REQUIRED\nCALC total = base_price * quantity * (1-discount)",
         },
     )
     assert response.status_code == 302
@@ -753,6 +753,44 @@ def test_api_returns_standard_error_for_invalid_json_payload(tmp_path) -> None:
     assert response.status_code == 400
     assert response.get_json() == {"error": "invalid request payload"}
 
+
+
+def test_evaluate_logs_constraint_violation_with_context(tmp_path, caplog) -> None:
+    db = tmp_path / "app.db"
+    rules = create_rules_engine_app(str(db))
+    rules_client = rules.test_client()
+    login(rules_client)
+    seed_ruleset(
+        rules_client,
+        '{"constraints":[{"expression":"quantity>=1","reason_code":"ERR_QUANTITY_REQUIRED"}],"calculations":[]}',
+    )
+    rules_client.post("/deploy/1", data={"environment": "dev"})
+
+    app = create_configurator_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    caplog.set_level("INFO")
+    response = client.post(
+        "/api/evaluate",
+        json={
+            "customer_id": "demo-customer",
+            "api_key": "demo-key",
+            "environment": "dev",
+            "configuration": {"quantity": 0},
+        },
+    )
+    assert response.status_code == 200
+
+    records = [record for record in caplog.records if record.message == "constraint_violation"]
+    assert records
+    event = records[-1]
+    assert event.code == "ERR_QUANTITY_REQUIRED"
+    assert event.recommended_severity == "BLOCK"
+    assert event.environment == "dev"
+    assert event.customer_id == "demo-customer"
+    assert event.ruleset_id == 1
+    assert event.product_name == "laptop"
 
 def test_evaluate_logs_configuration_state_change(tmp_path, caplog) -> None:
     db = tmp_path / "app.db"

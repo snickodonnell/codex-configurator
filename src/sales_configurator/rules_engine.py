@@ -4,6 +4,7 @@ import ast
 import itertools
 import logging
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -19,6 +20,9 @@ ALLOWED_FUNCTIONS = {
 
 CUSTOM_FUNCTIONS: dict[str, Callable[..., Any]] = {}
 DEFAULT_CONSTRAINT_REASON_CODE = "ERR_CONSTRAINT_FAILED"
+REASON_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
+SENSITIVE_VARIABLE_MARKERS = ("password", "secret", "token", "key", "credential", "auth")
+OVERRIDABLE_SEVERITY_LEVELS = {"BLOCK", "WARN", "INFO"}
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +100,8 @@ class _ConstraintSpec:
     recommended_severity: str
     expression_raw: str
     program: ExpressionProgram
+    rule_index: int
+    line_number: int | None = None
 
 
 class _ReferencedVariableVisitor(ast.NodeVisitor):
@@ -111,6 +117,15 @@ def extract_expression_variables(expression: str) -> set[str]:
     visitor = _ReferencedVariableVisitor()
     visitor.visit(tree)
     return visitor.referenced_variables
+
+
+def _resolve_recommended_severity(raw_value: Any) -> str:
+    candidate = str(raw_value or "").strip().upper()
+    if candidate not in OVERRIDABLE_SEVERITY_LEVELS:
+        return "BLOCK"
+    if candidate == "INFO":
+        return "WARN"
+    return candidate
 
 
 @dataclass(slots=True)
@@ -149,16 +164,22 @@ class RuleEngine:
         defaults = [_compile_default_spec(entry, functions) for entry in normalized.get("default_values", [])]
         constraints = [
             _ConstraintSpec(
-                code=str(
-                    constraint.get("reason_code")
-                    or constraint.get("message")
-                    or DEFAULT_CONSTRAINT_REASON_CODE
+                code=(
+                    candidate
+                    if REASON_CODE_PATTERN.fullmatch(candidate := str(constraint.get("reason_code") or "").strip())
+                    else DEFAULT_CONSTRAINT_REASON_CODE
                 ),
-                recommended_severity=str(constraint.get("recommended_severity", "BLOCK")),
+                recommended_severity=_resolve_recommended_severity(constraint.get("recommended_severity", "BLOCK")),
                 expression_raw=str(constraint["expression"]),
                 program=compile_expression(str(constraint["expression"]), functions),
+                rule_index=rule_index,
+                line_number=(
+                    int(line_no)
+                    if (line_no := constraint.get("line_number")) is not None
+                    else None
+                ),
             )
-            for constraint in normalized.get("constraints", [])
+            for rule_index, constraint in enumerate(normalized.get("constraints", []), start=1)
         ]
         calculations = [
             _CalculationSpec(
@@ -185,19 +206,28 @@ class RuleEngine:
             if not bool(result):
                 referenced_variables = sorted(extract_expression_variables(constraint.expression_raw))
                 snapshot = {
-                    variable: resolved_configuration.get(variable)
+                    variable: _safe_snapshot_value(variable, resolved_configuration.get(variable))
                     for variable in referenced_variables
                     if variable in resolved_configuration
                 }
+                violation_meta: dict[str, Any] = {
+                    "expression_raw": constraint.expression_raw,
+                    "referenced_variables": referenced_variables,
+                    "snapshot": snapshot,
+                    "evaluated_to": bool(result),
+                    "rule_index": constraint.rule_index,
+                    "severity": {
+                        "recommended": constraint.recommended_severity,
+                        "source": "rules_engine",
+                        "overrideable_by": "experience_studio",
+                    },
+                }
+                if constraint.line_number is not None:
+                    violation_meta["line_number"] = constraint.line_number
                 violation = Violation(
                     code=constraint.code,
                     recommended_severity=constraint.recommended_severity,
-                    meta={
-                        "expression_raw": constraint.expression_raw,
-                        "referenced_variables": referenced_variables,
-                        "snapshot": snapshot,
-                        "evaluated_to": False,
-                    },
+                    meta=violation_meta,
                     rule={"type": "CONSTRAINT", "raw": constraint.expression_raw},
                 )
                 violations.append(violation)
@@ -427,6 +457,34 @@ def safe_eval(
     return evaluate_program(program, context, functions=functions)
 
 
+def _contains_sensitive_marker(name: str) -> bool:
+    lowered = name.lower()
+    return any(marker in lowered for marker in SENSITIVE_VARIABLE_MARKERS)
+
+
+def _safe_snapshot_value(variable_name: str, value: Any) -> Any:
+    if _contains_sensitive_marker(variable_name):
+        return "<redacted>"
+
+    if value is None or isinstance(value, bool | int | float):
+        return value
+
+    if isinstance(value, str):
+        return value if len(value) <= 160 else f"{value[:157]}..."
+
+    if isinstance(value, (list, tuple)):
+        if len(value) > 10:
+            return f"<sequence len={len(value)}>"
+        if all(item is None or isinstance(item, bool | int | float | str) for item in value):
+            return [_safe_snapshot_value(variable_name, item) for item in value]
+        return f"<sequence len={len(value)}>"
+
+    if isinstance(value, dict):
+        return f"<mapping keys={len(value)}>"
+
+    return f"<object type={type(value).__name__}>"
+
+
 def _parse_literal_or_expression(raw_value: str) -> tuple[str, Any]:
     text = raw_value.strip()
     try:
@@ -434,6 +492,22 @@ def _parse_literal_or_expression(raw_value: str) -> tuple[str, Any]:
     except (ValueError, SyntaxError):
         return "formula", text
     return "value", parsed
+
+
+def _parse_error(line_number: int, message: str) -> RulesParseError:
+    return RulesParseError(f"line {line_number}: {message}")
+
+
+def _validate_reason_code(reason_code: str, line_number: int) -> str:
+    normalized = reason_code.strip()
+    if not normalized:
+        raise _parse_error(line_number, "CONSTRAINT reason code after '::' cannot be empty")
+    if not REASON_CODE_PATTERN.fullmatch(normalized):
+        raise _parse_error(
+            line_number,
+            f"invalid reason code '{normalized}' (expected uppercase token like ERR_SOME_CODE)",
+        )
+    return normalized
 
 
 def parse_ruleset_pseudocode(pseudo_code: str) -> dict[str, Any]:
@@ -451,17 +525,32 @@ def parse_ruleset_pseudocode(pseudo_code: str) -> dict[str, Any]:
         if not line or line.startswith("#"):
             continue
 
+        if line == "DEFAULT":
+            raise _parse_error(line_number, "DEFAULT requires '='")
+        if line == "CONSTRAINT":
+            raise _parse_error(line_number, "CONSTRAINT requires an expression")
+        if line == "CALC":
+            raise _parse_error(line_number, "CALC requires '='")
+        if line == "FUNCTION":
+            raise _parse_error(line_number, "FUNCTION requires '='")
+
         if line.startswith("DEFAULT "):
             body = line[len("DEFAULT ") :].strip()
             if "=" not in body:
-                raise RulesParseError(f"line {line_number}: DEFAULT requires '='")
+                raise _parse_error(line_number, "DEFAULT requires '='")
             before_equals, right_side = body.rsplit("=", 1)
             before_equals = before_equals.strip()
             right_side = right_side.strip()
+            if not right_side:
+                raise _parse_error(line_number, "DEFAULT requires a value or expression after '='")
             if " WHEN " in before_equals:
                 name, condition = before_equals.split(" WHEN ", 1)
                 name = name.strip()
                 condition = condition.strip()
+                if not name:
+                    raise _parse_error(line_number, "DEFAULT WHEN requires a target name before WHEN")
+                if not condition:
+                    raise _parse_error(line_number, "DEFAULT WHEN requires a condition between WHEN and '='")
                 value_kind, value = _parse_literal_or_expression(right_side)
                 existing = next(
                     (item for item in ruleset["default_values"] if item["name"] == name and item.get("mode") == "dynamic"),
@@ -475,6 +564,8 @@ def parse_ruleset_pseudocode(pseudo_code: str) -> dict[str, Any]:
                 existing["rules"].append(existing_rule)
             else:
                 name = before_equals
+                if not name:
+                    raise _parse_error(line_number, "DEFAULT requires a target name before '='")
                 value_kind, value = _parse_literal_or_expression(right_side)
                 if value_kind == "formula":
                     ruleset["default_values"].append(
@@ -486,36 +577,62 @@ def parse_ruleset_pseudocode(pseudo_code: str) -> dict[str, Any]:
 
         if line.startswith("CONSTRAINT "):
             body = line[len("CONSTRAINT ") :].strip()
+            if not body:
+                raise _parse_error(line_number, "CONSTRAINT requires an expression")
             if "::" in body:
                 expression, reason_code = body.split("::", 1)
-                reason_code = reason_code.strip()
+                reason_code = _validate_reason_code(reason_code, line_number)
             else:
                 expression = body
                 reason_code = DEFAULT_CONSTRAINT_REASON_CODE
-            ruleset["constraints"].append({"expression": expression.strip(), "reason_code": reason_code})
+            expression = expression.strip()
+            if not expression:
+                raise _parse_error(line_number, "CONSTRAINT requires an expression before '::'")
+            ruleset["constraints"].append({"expression": expression, "reason_code": reason_code, "line_number": line_number})
             continue
 
         if line.startswith("CALC "):
             body = line[len("CALC ") :].strip()
             if "=" not in body:
-                raise RulesParseError(f"line {line_number}: CALC requires '='")
+                raise _parse_error(line_number, "CALC requires '='")
             name, formula = body.split("=", 1)
-            ruleset["calculations"].append({"name": name.strip(), "formula": formula.strip()})
+            name = name.strip()
+            formula = formula.strip()
+            if not name:
+                raise _parse_error(line_number, "CALC requires a target name before '='")
+            if not formula:
+                raise _parse_error(line_number, "CALC requires a formula after '='")
+            ruleset["calculations"].append({"name": name, "formula": formula})
             continue
 
         if line.startswith("FUNCTION "):
             body = line[len("FUNCTION ") :].strip()
             if "=" not in body:
-                raise RulesParseError(f"line {line_number}: FUNCTION requires '='")
+                raise _parse_error(line_number, "FUNCTION requires '='")
             signature, expression = body.split("=", 1)
+            signature = signature.strip()
+            expression = expression.strip()
+            if not expression:
+                raise _parse_error(line_number, "FUNCTION requires an expression after '='")
+            if "(" not in signature or not signature.endswith(")"):
+                raise _parse_error(line_number, "FUNCTION signature must be in the form name(arg1, arg2)")
             name, arglist = signature.split("(", 1)
-            args = [arg.strip() for arg in arglist.rstrip(")").split(",") if arg.strip()]
+            name = name.strip()
+            if not name:
+                raise _parse_error(line_number, "FUNCTION requires a function name")
+            raw_args = arglist[:-1].strip()
+            if not raw_args:
+                args: list[str] = []
+            else:
+                args = [arg.strip() for arg in raw_args.split(",")]
+                if any(not arg for arg in args):
+                    raise _parse_error(line_number, "FUNCTION arguments must be comma-separated names")
             ruleset["custom_functions"].append(
-                {"name": name.strip(), "args": args, "expression": expression.strip()}
+                {"name": name, "args": args, "expression": expression}
             )
             continue
 
-        raise RulesParseError(f"line {line_number}: unrecognized statement '{line}'")
+        raise _parse_error(line_number, f"unrecognized statement '{line}'")
 
     return ruleset
 
@@ -541,7 +658,12 @@ def ruleset_to_pseudocode(ruleset: dict[str, Any]) -> str:
                 lines.append(f"DEFAULT {default['name']} = {rhs}")
 
     for constraint in normalized["constraints"]:
-        reason_code = constraint.get("reason_code") or constraint.get("message") or DEFAULT_CONSTRAINT_REASON_CODE
+        raw_reason_code = str(constraint.get("reason_code") or "").strip()
+        reason_code = (
+            raw_reason_code
+            if REASON_CODE_PATTERN.fullmatch(raw_reason_code)
+            else DEFAULT_CONSTRAINT_REASON_CODE
+        )
         lines.append(f"CONSTRAINT {constraint['expression']} :: {reason_code}")
 
     for calc in normalized["calculations"]:
