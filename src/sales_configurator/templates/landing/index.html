@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Configurator Admin Landing</title>
+    <title>Launchpad Orbit</title>
     <style>
       body{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}
       .cards{display:flex;gap:1rem;flex-wrap:wrap}
@@ -13,25 +13,25 @@
     </style>
   </head>
   <body>
-    <h1>Sales Configurator Admin Landing</h1>
-    <p>Launch points and visibility for rules, design, and end-user usage.</p>
+    <h1>Launchpad Orbit</h1>
+    <p>Navigate between RuleCanvas, Experience Studio, and ShopFloor Configurator.</p>
     <form method="post" action="/logout"><button type="submit">Logout</button></form>
 
     <section class="cards">
       <div class="card">
-        <h2>Rules Engine</h2>
-        <p>Manage and deploy product rule sets.</p>
-        <a href="{{ rules_engine_url }}">Open Rules Engine</a>
+        <h2>RuleCanvas</h2>
+        <p>Author and deploy deterministic product rules.</p>
+        <a href="{{ rule_canvas_url }}">Open RuleCanvas</a>
       </div>
       <div class="card">
-        <h2>Configuration Front-End Design</h2>
-        <p>Design and review configurator UX enhancements.</p>
-        <a href="{{ design_url }}">Open Design Front-End</a>
+        <h2>Experience Studio</h2>
+        <p>Map rule parameters to rich end-user controls and image-driven styles.</p>
+        <a href="{{ experience_studio_url }}">Open Experience Studio</a>
       </div>
       <div class="card">
-        <h2>End User Front-End</h2>
-        <p>Customer-facing runtime configurator interface.</p>
-        <a href="{{ end_user_url }}">Open End User Front-End</a>
+        <h2>ShopFloor Configurator</h2>
+        <p>Customer-facing runtime configurator driven by deployed logic and UI mappings.</p>
+        <a href="{{ shop_floor_url }}">Open ShopFloor</a>
       </div>
     </section>
 

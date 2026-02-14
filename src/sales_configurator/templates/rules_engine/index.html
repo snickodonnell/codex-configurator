@@ -104,14 +104,20 @@
                 <div class="muted">{{ ruleset.product_name }} / {{ ruleset.category }} / {{ ruleset.subcategory }} • v{{ ruleset.version }} • {{ ruleset.environment }}</div>
               </div>
               <div class="row wrap">
+                {% set workflow = workflows.get(ruleset.id) %}
+                <span class="pill">{{ workflow.state if workflow else 'draft' }}</span>
+                {% if workflow and workflow.requires_ux_update %}<span class="pill" style="background:#fee2e2;color:#991b1b">UX Update Required</span>{% endif %}
                 <form method="get" action="/"><input type="hidden" name="edit" value="{{ ruleset.id }}" /><button type="submit">Edit</button></form>
+                <form method="post" action="/workflow/{{ ruleset.id }}/send-to-studio"><button type="submit">Send to Studio</button></form>
+                <form method="post" action="/workflow/{{ ruleset.id }}/request-approval"><button type="submit">Request Approval</button></form>
+                <form method="post" action="/workflow/{{ ruleset.id }}/approve"><button type="submit">Approve</button></form>
                 <form method="post" action="/deploy/{{ ruleset.id }}"><input name="environment" value="{{ ruleset.environment }}" style="width:80px"/><button type="submit">Deploy</button></form>
               </div>
             </div>
             {% else %}<p class="muted">No rulesets yet.</p>{% endfor %}
           </article>
 
-          <article class="card"><h3>Active deployments</h3><ul>{% for deployment in deployments %}<li>{{ deployment.environment }} => ruleset #{{ deployment.ruleset_id }} at {{ deployment.deployed_at }}</li>{% else %}<li>No deployments yet.</li>{% endfor %}</ul></article>
+          <article class="card"><h3>Active deployments</h3><ul>{% for deployment in deployments %}<li>{{ deployment.environment }} => ruleset #{{ deployment.ruleset_id }} at {{ deployment.deployed_at }}</li>{% else %}<li>No deployments yet.</li>{% endfor %}</ul><form method="post" action="/rollback" class="row" style="margin-top:.6rem"><input name="environment" value="dev" style="width:90px"/><button type="submit">Rollback</button></form></article>
         </section>
       </div>
     </div>

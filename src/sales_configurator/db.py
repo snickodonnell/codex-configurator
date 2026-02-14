@@ -26,6 +26,51 @@ CREATE TABLE IF NOT EXISTS deployments (
     FOREIGN KEY (ruleset_id) REFERENCES rulesets(id)
 );
 
+CREATE TABLE IF NOT EXISTS deployment_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    environment TEXT NOT NULL,
+    ruleset_id INTEGER NOT NULL,
+    action TEXT NOT NULL DEFAULT 'deploy',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (ruleset_id) REFERENCES rulesets(id)
+);
+
+CREATE TABLE IF NOT EXISTS release_workflows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ruleset_id INTEGER NOT NULL UNIQUE,
+    environment TEXT NOT NULL,
+    rules_fingerprint TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'draft',
+    requires_ux_update INTEGER NOT NULL DEFAULT 1,
+    ux_schema_version INTEGER NOT NULL DEFAULT 0,
+    approved_by TEXT,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (ruleset_id) REFERENCES rulesets(id)
+);
+
+CREATE TABLE IF NOT EXISTS ruleset_parameter_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ruleset_id INTEGER NOT NULL,
+    parameter_name TEXT NOT NULL,
+    data_type TEXT NOT NULL,
+    parameter_class TEXT NOT NULL,
+    governance_control_types TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (ruleset_id) REFERENCES rulesets(id)
+);
+
+CREATE TABLE IF NOT EXISTS ui_schema_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ruleset_id INTEGER NOT NULL,
+    schema_version INTEGER NOT NULL,
+    change_notes TEXT NOT NULL DEFAULT '',
+    updated_by TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (ruleset_id) REFERENCES rulesets(id)
+);
+
 CREATE TABLE IF NOT EXISTS configuration_states (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     customer_id TEXT NOT NULL,
@@ -92,6 +137,39 @@ CREATE TABLE IF NOT EXISTS workspace_categories (
     FOREIGN KEY (parent_id) REFERENCES workspace_categories(id)
 );
 
+CREATE TABLE IF NOT EXISTS ui_parameter_configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parameter_name TEXT NOT NULL,
+    ruleset_id INTEGER NOT NULL,
+    display_label TEXT NOT NULL,
+    help_text TEXT NOT NULL DEFAULT '',
+    control_type TEXT NOT NULL DEFAULT 'text',
+    display_style TEXT NOT NULL DEFAULT 'classic',
+    min_value REAL,
+    max_value REAL,
+    step_value REAL,
+    placeholder TEXT NOT NULL DEFAULT '',
+    image_url TEXT NOT NULL DEFAULT '',
+    value_image_mode TEXT NOT NULL DEFAULT 'none',
+    is_required INTEGER NOT NULL DEFAULT 0,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(parameter_name, ruleset_id),
+    FOREIGN KEY (ruleset_id) REFERENCES rulesets(id)
+);
+
+CREATE TABLE IF NOT EXISTS ui_parameter_options (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parameter_name TEXT NOT NULL,
+    ruleset_id INTEGER NOT NULL,
+    option_value TEXT NOT NULL,
+    option_label TEXT NOT NULL,
+    option_order INTEGER NOT NULL DEFAULT 0,
+    image_url TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (parameter_name, ruleset_id) REFERENCES ui_parameter_configs(parameter_name, ruleset_id)
+);
+
 CREATE TABLE IF NOT EXISTS workspace_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     product_id INTEGER NOT NULL,
@@ -125,6 +203,8 @@ def init_db(db_path: str | Path) -> None:
         migrate_rulesets_schema(conn)
         migrate_configuration_memo_schema(conn)
         migrate_workspace_schema(conn)
+        migrate_ui_schema(conn)
+        migrate_workflow_schema(conn)
         seed_default_access(conn)
         seed_default_enhancements(conn)
         seed_workspace_defaults(conn)
@@ -192,6 +272,36 @@ def migrate_workspace_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_workspace_rules_order
         ON workspace_rules(product_id, category_id, subcategory_id, position)
+        """
+    )
+
+
+def migrate_ui_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ui_parameter_options_lookup
+        ON ui_parameter_options(ruleset_id, parameter_name, option_order)
+        """
+    )
+
+
+def migrate_workflow_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_release_workflows_lookup
+        ON release_workflows(environment, state, requires_ux_update)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ruleset_parameter_profiles_lookup
+        ON ruleset_parameter_profiles(ruleset_id, parameter_name)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_deployment_history_env
+        ON deployment_history(environment, created_at)
         """
     )
 
