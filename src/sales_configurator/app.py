@@ -8,7 +8,7 @@ from typing import Any
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 
 from .db import connect, init_db, json_dumps
-from .rules_engine import evaluate_rules, optimize_configuration
+from .rules_engine import evaluate_rules, normalize_ruleset, optimize_configuration
 
 
 DEFAULT_RULESET = {
@@ -43,7 +43,7 @@ def _load_deployed_rules(conn: Any, environment: str) -> dict[str, Any]:
         """,
         (environment,),
     ).fetchone()
-    return json.loads(row["payload"]) if row else DEFAULT_RULESET
+    return normalize_ruleset(json.loads(row["payload"]) if row else DEFAULT_RULESET)
 
 
 def _authorize(conn: Any, customer_id: str, api_key: str, environment: str) -> bool:
@@ -148,24 +148,66 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
     @app.get("/")
     def index() -> str:
         conn = connect(_db_path(app))
+        selected_ruleset_id = request.args.get("edit", type=int)
+        selected_ruleset = None
+        if selected_ruleset_id:
+            selected_ruleset = conn.execute(
+                "SELECT * FROM rulesets WHERE id = ?", (selected_ruleset_id,)
+            ).fetchone()
         rulesets = conn.execute(
-            "SELECT id, name, environment, created_at FROM rulesets ORDER BY id DESC"
+            """
+            SELECT id, name, environment, product_name, category, subcategory, version, payload, created_at
+            FROM rulesets
+            ORDER BY product_name, category, subcategory, version DESC, id DESC
+            """
         ).fetchall()
         deployments = conn.execute("SELECT environment, ruleset_id, deployed_at FROM deployments").fetchall()
-        return render_template("rules_engine/index.html", rulesets=rulesets, deployments=deployments)
+        return render_template(
+            "rules_engine/index.html",
+            rulesets=rulesets,
+            deployments=deployments,
+            selected_ruleset=selected_ruleset,
+        )
 
     @app.post("/rulesets")
     def create_ruleset() -> Any:
         payload = request.form.get("payload", "")
         name = request.form.get("name", "Untitled Ruleset")
         environment = request.form.get("environment", "dev")
-        parsed = json.loads(payload)
+        product_name = request.form.get("product_name", "default-product").strip() or "default-product"
+        category = request.form.get("category", "general").strip() or "general"
+        subcategory = request.form.get("subcategory", "default").strip() or "default"
+        version = int(request.form.get("version", "1"))
+        ruleset_id = request.form.get("ruleset_id", "").strip()
+        parsed = normalize_ruleset(json.loads(payload))
         conn = connect(_db_path(app))
         with conn:
-            conn.execute(
-                "INSERT INTO rulesets(name, environment, payload) VALUES (?, ?, ?)",
-                (name, environment, json_dumps(parsed)),
-            )
+            if ruleset_id:
+                conn.execute(
+                    """
+                    UPDATE rulesets
+                    SET name = ?, environment = ?, product_name = ?, category = ?, subcategory = ?, version = ?, payload = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        name,
+                        environment,
+                        product_name,
+                        category,
+                        subcategory,
+                        version,
+                        json_dumps(parsed),
+                        int(ruleset_id),
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO rulesets(name, environment, product_name, category, subcategory, version, payload)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (name, environment, product_name, category, subcategory, version, json_dumps(parsed)),
+                )
         return redirect(url_for("index"))
 
     @app.post("/deploy/<int:ruleset_id>")

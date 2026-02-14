@@ -50,6 +50,17 @@ class UnsafeExpressionError(ValueError):
     """Raised when the expression includes unsafe syntax."""
 
 
+def normalize_ruleset(ruleset: dict[str, Any] | None) -> dict[str, Any]:
+    base = ruleset or {}
+    return {
+        "schema_version": int(base.get("schema_version", 1)),
+        "default_values": list(base.get("default_values", [])),
+        "constraints": list(base.get("constraints", [])),
+        "calculations": list(base.get("calculations", [])),
+        **{key: value for key, value in base.items() if key not in {"default_values", "constraints", "calculations", "schema_version"}},
+    }
+
+
 
 def _validate_ast(tree: ast.AST) -> None:
     for node in ast.walk(tree):

@@ -3,43 +3,76 @@
   <head>
     <meta charset="utf-8" />
     <title>Rules Engine</title>
-    <style>body{font-family:Arial,sans-serif;margin:2rem;max-width:900px}textarea{width:100%;height:200px}</style>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 2rem; }
+      .layout { display: grid; grid-template-columns: 1.15fr 1fr; gap: 1.5rem; align-items: start; }
+      .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; background: #fff; }
+      textarea { width: 100%; height: 260px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+      .rule-item { padding: 0.6rem; border-bottom: 1px solid #eee; }
+      .meta { color: #4b5563; font-size: 0.9rem; }
+      .category-pill { background: #eef2ff; color: #3730a3; border-radius: 999px; padding: 0.15rem 0.5rem; font-size: 0.8rem; }
+    </style>
   </head>
   <body>
     <h1>Rules Engine Console</h1>
-    <p>Create and deploy versioned rulesets for each environment.</p>
+    <p>Create, edit, categorize, and deploy product rulesets. Rules are versioned and compatible in-category.</p>
     <form method="post" action="/logout"><button type="submit">Logout</button></form>
 
-    <h2>Create ruleset</h2>
-    <form method="post" action="/rulesets">
-      <label>Name <input name="name" value="Default Rules" /></label>
-      <label>Environment <input name="environment" value="dev" /></label>
-      <p>Payload JSON:</p>
-      <textarea name="payload">{"default_values":[{"name":"discount","mode":"static","value":0.05},{"name":"region","mode":"dynamic","rules":[{"condition":"country == 'DE'","value":"EU"},{"value":"NA"}]}],"constraints":[{"expression":"quantity >= 1","message":"Quantity must be at least 1."}],"calculations":[{"name":"total_price","formula":"base_price * quantity * (1-discount)"}]}</textarea>
-      <button type="submit">Save</button>
-    </form>
-
-    <h2>Rulesets</h2>
-    <ul>
-      {% for ruleset in rulesets %}
-      <li>#{{ ruleset.id }} {{ ruleset.name }} ({{ ruleset.environment }})
-        <form method="post" action="/deploy/{{ ruleset.id }}" style="display:inline">
-          <input name="environment" value="{{ ruleset.environment }}" />
-          <button type="submit">Deploy</button>
+    <div class="layout">
+      <section class="card">
+        <h2>{% if selected_ruleset %}Edit ruleset #{{ selected_ruleset.id }}{% else %}Create ruleset{% endif %}</h2>
+        <form method="post" action="/rulesets">
+          {% if selected_ruleset %}
+          <input type="hidden" name="ruleset_id" value="{{ selected_ruleset.id }}" />
+          {% endif %}
+          <div class="grid">
+            <label>Name <input name="name" value="{{ selected_ruleset.name if selected_ruleset else 'Default Rules' }}" /></label>
+            <label>Environment <input name="environment" value="{{ selected_ruleset.environment if selected_ruleset else 'dev' }}" /></label>
+            <label>Product <input name="product_name" value="{{ selected_ruleset.product_name if selected_ruleset else 'laptop' }}" /></label>
+            <label>Version <input type="number" min="1" name="version" value="{{ selected_ruleset.version if selected_ruleset else 1 }}" /></label>
+            <label>Category <input name="category" value="{{ selected_ruleset.category if selected_ruleset else 'pricing' }}" /></label>
+            <label>Subcategory <input name="subcategory" value="{{ selected_ruleset.subcategory if selected_ruleset else 'discounts' }}" /></label>
+          </div>
+          <p>Payload JSON:</p>
+          <textarea name="payload">{{ selected_ruleset.payload if selected_ruleset else '{"schema_version":1,"default_values":[{"name":"discount","mode":"static","value":0.05}],"constraints":[{"expression":"quantity >= 1","message":"Quantity must be at least 1."}],"calculations":[{"name":"total_price","formula":"base_price * quantity * (1-discount)"}]}' }}</textarea>
+          <p class="meta">Tip: adding new fields is safe. Unknown fields are ignored by older readers for forward/backward compatibility in each category.</p>
+          <button type="submit">{% if selected_ruleset %}Update{% else %}Save{% endif %}</button>
         </form>
-      </li>
-      {% else %}
-      <li>No rulesets yet.</li>
-      {% endfor %}
-    </ul>
+      </section>
 
-    <h2>Active deployments</h2>
-    <ul>
-      {% for deployment in deployments %}
-      <li>{{ deployment.environment }} => ruleset #{{ deployment.ruleset_id }} at {{ deployment.deployed_at }}</li>
-      {% else %}
-      <li>No deployments yet.</li>
-      {% endfor %}
-    </ul>
+      <section class="card">
+        <h2>Existing rulesets</h2>
+        {% for ruleset in rulesets %}
+        <div class="rule-item">
+          <strong>#{{ ruleset.id }} {{ ruleset.name }}</strong>
+          <div class="meta">
+            {{ ruleset.product_name }} • <span class="category-pill">{{ ruleset.category }}</span> / {{ ruleset.subcategory }} • v{{ ruleset.version }} • {{ ruleset.environment }}
+          </div>
+          <form method="get" action="/" style="display:inline">
+            <input type="hidden" name="edit" value="{{ ruleset.id }}" />
+            <button type="submit">Edit</button>
+          </form>
+          <form method="post" action="/deploy/{{ ruleset.id }}" style="display:inline">
+            <input name="environment" value="{{ ruleset.environment }}" />
+            <button type="submit">Deploy</button>
+          </form>
+        </div>
+        {% else %}
+        <p>No rulesets yet.</p>
+        {% endfor %}
+      </section>
+    </div>
+
+    <section class="card" style="margin-top: 1rem;">
+      <h2>Active deployments</h2>
+      <ul>
+        {% for deployment in deployments %}
+        <li>{{ deployment.environment }} => ruleset #{{ deployment.ruleset_id }} at {{ deployment.deployed_at }}</li>
+        {% else %}
+        <li>No deployments yet.</li>
+        {% endfor %}
+      </ul>
+    </section>
   </body>
 </html>

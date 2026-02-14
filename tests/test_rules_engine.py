@@ -1,4 +1,4 @@
-from sales_configurator.rules_engine import evaluate_rules, optimize_configuration, safe_eval
+from sales_configurator.rules_engine import evaluate_rules, normalize_ruleset, optimize_configuration, safe_eval
 
 
 def test_safe_eval_blocks_unsafe_calls() -> None:
@@ -76,3 +76,12 @@ def test_explicit_value_overrides_default() -> None:
     result = evaluate_rules(ruleset, {"discount": 0})
     assert result.valid is True
     assert result.resolved_configuration["discount"] == 0
+
+
+def test_normalize_ruleset_for_compatibility() -> None:
+    normalized = normalize_ruleset({"constraints": [{"expression": "x > 0", "message": "bad"}], "custom": True})
+    assert normalized["schema_version"] == 1
+    assert normalized["constraints"][0]["expression"] == "x > 0"
+    assert normalized["calculations"] == []
+    assert normalized["default_values"] == []
+    assert normalized["custom"] is True
