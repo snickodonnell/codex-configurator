@@ -2,79 +2,85 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Launchpad Orbit</title>
-    <style>
-      body{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}
-      .cards{display:flex;gap:1rem;flex-wrap:wrap}
-      .card{border:1px solid #ddd;padding:1rem;border-radius:8px;min-width:260px}
-      table{width:100%;border-collapse:collapse;margin:0.5rem 0 1.5rem}
-      th,td{border:1px solid #ddd;padding:.5rem;text-align:left}
-      form.inline input{margin-right:.5rem}
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
   </head>
   <body>
-    <h1>Launchpad Orbit</h1>
-    <p>Navigate between RuleCanvas, Experience Studio, and ShopFloor Configurator.</p>
-    <form method="post" action="/logout"><button type="submit">Logout</button></form>
-
-    <section class="cards">
-      <div class="card">
-        <h2>RuleCanvas</h2>
-        <p>Author and deploy deterministic product rules.</p>
-        <a href="{{ rule_canvas_url }}">Open RuleCanvas</a>
+    <div class="page stack">
+      <div class="topbar">
+        <div>
+          <h1 style="margin:0;">Launchpad Orbit</h1>
+          <p class="muted" style="margin:.4rem 0 0;">Navigate between RuleCanvas, Experience Studio, and ShopFloor Configurator.</p>
+        </div>
+        <form method="post" action="/logout"><button type="submit">Logout</button></form>
       </div>
-      <div class="card">
-        <h2>Experience Studio</h2>
-        <p>Map rule parameters to rich end-user controls and image-driven styles.</p>
-        <a href="{{ experience_studio_url }}">Open Experience Studio</a>
-      </div>
-      <div class="card">
-        <h2>ShopFloor Configurator</h2>
-        <p>Customer-facing runtime configurator driven by deployed logic and UI mappings.</p>
-        <a href="{{ shop_floor_url }}">Open ShopFloor</a>
-      </div>
-    </section>
 
-    <h2>Product Rule Sets</h2>
-    <table>
-      <thead><tr><th>ID</th><th>Name</th><th>Environment</th><th>Created</th></tr></thead>
-      <tbody>
-        {% for ruleset in rulesets %}
-        <tr><td>{{ ruleset.id }}</td><td>{{ ruleset.name }}</td><td>{{ ruleset.environment }}</td><td>{{ ruleset.created_at }}</td></tr>
-        {% else %}
-        <tr><td colspan="4">No rulesets yet.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+      <section class="cards-grid">
+        <article class="card">
+          <h2>RuleCanvas</h2>
+          <p class="muted">Author and deploy deterministic product rules.</p>
+          <a class="button-link primary" href="{{ rule_canvas_url }}">Open RuleCanvas</a>
+        </article>
+        <article class="card">
+          <h2>Experience Studio</h2>
+          <p class="muted">Map rule parameters to rich end-user controls and image-driven styles.</p>
+          <a class="button-link primary" href="{{ experience_studio_url }}">Open Experience Studio</a>
+        </article>
+        <article class="card">
+          <h2>ShopFloor Configurator</h2>
+          <p class="muted">Customer-facing runtime configurator driven by deployed logic and UI mappings.</p>
+          <a class="button-link primary" href="{{ shop_floor_url }}">Open ShopFloor</a>
+        </article>
+      </section>
 
-    <h2>Front-End Enhancements</h2>
-    <form class="inline" method="post" action="/enhancements">
-      <input name="title" placeholder="Enhancement title" required />
-      <input name="status" placeholder="planned/in-progress/done" value="planned" required />
-      <input name="notes" placeholder="Notes" required />
-      <button type="submit">Add</button>
-    </form>
-    <table>
-      <thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Notes</th><th>Created</th></tr></thead>
-      <tbody>
-        {% for enhancement in enhancements %}
-        <tr><td>{{ enhancement.id }}</td><td>{{ enhancement.title }}</td><td>{{ enhancement.status }}</td><td>{{ enhancement.notes }}</td><td>{{ enhancement.created_at }}</td></tr>
-        {% else %}
-        <tr><td colspan="5">No enhancements yet.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+      <section class="card">
+        <h2>Product Rule Sets</h2>
+        <table>
+          <thead><tr><th>ID</th><th>Name</th><th>Environment</th><th>Created</th></tr></thead>
+          <tbody>
+            {% for ruleset in rulesets %}
+            <tr><td>{{ ruleset.id }}</td><td>{{ ruleset.name }}</td><td>{{ ruleset.environment }}</td><td>{{ ruleset.created_at }}</td></tr>
+            {% else %}
+            <tr><td colspan="4" class="muted">No rulesets yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
 
-    <h2>Recent End-User Configurations</h2>
-    <table>
-      <thead><tr><th>ID</th><th>Customer</th><th>Environment</th><th>Last Updated</th></tr></thead>
-      <tbody>
-        {% for config in configurations %}
-        <tr><td>{{ config.id }}</td><td>{{ config.customer_id }}</td><td>{{ config.environment }}</td><td>{{ config.updated_at }}</td></tr>
-        {% else %}
-        <tr><td colspan="4">No configurations have been evaluated yet.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+      <section class="card stack">
+        <h2 style="margin:0;">Front-End Enhancements</h2>
+        <form class="row wrap" method="post" action="/enhancements">
+          <input name="title" placeholder="Enhancement title" required style="max-width:260px;" />
+          <input name="status" placeholder="planned/in-progress/done" value="planned" required style="max-width:220px;" />
+          <input name="notes" placeholder="Notes" required style="flex:1;min-width:220px;" />
+          <button type="submit" class="primary">Add</button>
+        </form>
+        <table>
+          <thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Notes</th><th>Created</th></tr></thead>
+          <tbody>
+            {% for enhancement in enhancements %}
+            <tr><td>{{ enhancement.id }}</td><td>{{ enhancement.title }}</td><td>{{ enhancement.status }}</td><td>{{ enhancement.notes }}</td><td>{{ enhancement.created_at }}</td></tr>
+            {% else %}
+            <tr><td colspan="5" class="muted">No enhancements yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>Recent End-User Configurations</h2>
+        <table>
+          <thead><tr><th>ID</th><th>Customer</th><th>Environment</th><th>Last Updated</th></tr></thead>
+          <tbody>
+            {% for config in configurations %}
+            <tr><td>{{ config.id }}</td><td>{{ config.customer_id }}</td><td>{{ config.environment }}</td><td>{{ config.updated_at }}</td></tr>
+            {% else %}
+            <tr><td colspan="4" class="muted">No configurations have been evaluated yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    </div>
   </body>
 </html>
