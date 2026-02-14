@@ -984,9 +984,9 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
     def _log_constraint_violations(
         violations_debug: list[dict[str, Any]],
         *,
-        environment: str | None = None,
-        customer_id: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
+        context_payload = dict(context or {})
         for violation in violations_debug:
             app.logger.info(
                 "constraint_violation",
@@ -994,8 +994,7 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
                     "code": violation["code"],
                     "recommended_severity": violation["recommended_severity"],
                     "meta": violation["meta"],
-                    "environment": environment,
-                    "customer_id": customer_id,
+                    **context_payload,
                 },
             )
 
@@ -1279,8 +1278,13 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
         public_violations, violation_codes, violations_debug = _serialize_violations(evaluated.violations)
         _log_constraint_violations(
             violations_debug,
-            environment=str(environment),
-            customer_id=str(customer_id),
+            context={
+                "environment": str(environment),
+                "customer_id": str(customer_id),
+                "project_id": project_id,
+                "project_product_id": item_id,
+                "workspace_product_id": int(row["workspace_product_id"]),
+            },
         )
 
         context = {**evaluated.resolved_configuration, **evaluated.calculations}
@@ -1433,8 +1437,15 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
         public_violations, violation_codes, violations_debug = _serialize_violations(evaluated.violations)
         _log_constraint_violations(
             violations_debug,
-            environment=str(environment),
-            customer_id=str(customer_id),
+            context={
+                "environment": str(environment),
+                "customer_id": str(customer_id),
+                "ruleset_id": deployed.get("ruleset_id"),
+                "product_name": str(deployed["product_name"]),
+                "category": str(deployed["category"]),
+                "subcategory": str(deployed["subcategory"]),
+                "version": deployed.get("version"),
+            },
         )
         memo_schema = _build_configuration_memo_schema(ruleset, deployed)
 
