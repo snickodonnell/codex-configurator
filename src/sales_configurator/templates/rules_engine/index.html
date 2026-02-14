@@ -4,111 +4,159 @@
     <meta charset="utf-8" />
     <title>Rules Engine</title>
     <style>
-      :root {
-        --surface: #ffffff;
-        --surface-muted: #f8fafc;
-        --border: #dbe3ee;
-        --accent-bg: #eef2ff;
-        --accent-text: #3730a3;
-        --text-muted: #4b5563;
-      }
-      body { font-family: Arial, sans-serif; margin: 2rem; background: var(--surface-muted); }
-      .topbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-      .layout { display: grid; grid-template-columns: 1.2fr 1fr; gap: 1.5rem; align-items: start; }
-      .card { border: 1px solid var(--border); border-radius: 8px; padding: 1rem; background: var(--surface); }
-      textarea { width: 100%; min-height: 240px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
-      .field { display: flex; flex-direction: column; gap: 0.25rem; }
-      .rule-item { padding: 0.6rem; border-bottom: 1px solid #eee; }
-      .meta { color: var(--text-muted); font-size: 0.9rem; }
-      .category-pill { background: var(--accent-bg); color: var(--accent-text); border-radius: 999px; padding: 0.15rem 0.5rem; font-size: 0.8rem; }
-      .error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; padding: 0.75rem; border-radius: 6px; }
-      .hint-list { margin: 0.4rem 0 0; padding-left: 1.25rem; color: var(--text-muted); }
-      code { background: #f3f4f6; padding: 0.15rem 0.25rem; border-radius: 4px; }
+      :root { --bg:#f4f6fb; --card:#fff; --text:#172033; --muted:#5d6880; --border:#d7deea; --accent:#4f46e5; --accent-soft:#ede9fe; }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+      .page { max-width: 1400px; margin: 0 auto; padding: 1.25rem; }
+      .topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; }
+      .layout { display:grid; grid-template-columns: 340px 1fr; gap:1rem; }
+      .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:1rem; box-shadow: 0 8px 24px rgba(17,24,39,.05); }
+      .muted { color:var(--muted); font-size:.9rem; }
+      .products button.active { background: var(--accent); color:white; }
+      button { border:1px solid var(--border); background:#fff; border-radius:8px; padding:.45rem .7rem; cursor:pointer; }
+      button.primary { background:var(--accent); color:white; border-color:var(--accent); }
+      .stack { display:flex; flex-direction:column; gap:.6rem; }
+      .row { display:flex; gap:.5rem; align-items:center; }
+      input, select, textarea { width:100%; border:1px solid var(--border); border-radius:8px; padding:.5rem; }
+      textarea { min-height:160px; font-family: ui-monospace, monospace; }
+      .workspace { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }
+      .category { border:1px solid var(--border); border-radius:12px; padding:.8rem; background:#fbfdff; }
+      .rule { border:1px solid var(--border); border-radius:10px; padding:.6rem; margin-top:.45rem; background:#fff; }
+      .rule.readonly { opacity:.88; }
+      .pill { display:inline-block; background:var(--accent-soft); color:#4338ca; border-radius:999px; font-size:.75rem; padding:.1rem .45rem; }
+      .grid2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.6rem; }
     </style>
   </head>
   <body>
-    <div class="topbar">
-      <div>
-        <h1>Rules Engine Console</h1>
-        <p>Create, edit, categorize, and deploy product rulesets. This UI is structured with reusable cards so interactive editors can be added incrementally.</p>
-      </div>
-      <form method="post" action="/logout"><button type="submit">Logout</button></form>
-    </div>
-
-    <div class="layout" data-ui-region="rules-engine-workspace">
-      <section class="card" data-ui-region="ruleset-editor">
-        <h2>{% if selected_ruleset %}Edit ruleset #{{ selected_ruleset.id }}{% else %}Create ruleset{% endif %}</h2>
-        {% if parse_error %}
-        <p class="error">Unable to save rules: {{ parse_error }}</p>
-        {% endif %}
-        <form method="post" action="/rulesets">
-          {% if selected_ruleset %}
-          <input type="hidden" name="ruleset_id" value="{{ selected_ruleset.id }}" />
-          {% endif %}
-          <div class="grid">
-            <label class="field">Name <input name="name" value="{{ selected_ruleset.name if selected_ruleset else 'Default Rules' }}" /></label>
-            <label class="field">Environment <input name="environment" value="{{ selected_ruleset.environment if selected_ruleset else 'dev' }}" /></label>
-            <label class="field">Product <input name="product_name" value="{{ selected_ruleset.product_name if selected_ruleset else 'laptop' }}" /></label>
-            <label class="field">Version <input type="number" min="1" name="version" value="{{ selected_ruleset.version if selected_ruleset else 1 }}" /></label>
-            <label class="field">Category <input name="category" value="{{ selected_ruleset.category if selected_ruleset else 'pricing' }}" /></label>
-            <label class="field">Subcategory <input name="subcategory" value="{{ selected_ruleset.subcategory if selected_ruleset else 'discounts' }}" /></label>
-          </div>
-
-          <p>Rules DSL:</p>
-          <textarea name="pseudo_rules">{{ selected_pseudocode if selected_pseudocode else "# Supported lines:\n# DEFAULT field = value\n# DEFAULT field WHEN condition = formula_or_value\n# CONSTRAINT expression :: message\n# CALC result_field = formula\n# FUNCTION margin(price,cost) = price - cost\n\nDEFAULT discount = 0.05\nCONSTRAINT quantity >= 1 :: Quantity must be at least 1\nCALC total_price = base_price * quantity * (1 - discount)" }}</textarea>
-
-          <details>
-            <summary>Advanced: edit raw JSON payload</summary>
-            <textarea name="payload">{{ selected_ruleset.payload if selected_ruleset else '' }}</textarea>
-          </details>
-
-          <p class="meta">Expressions support comparator and algebra symbols (<code>==</code>, <code>>=</code>, <code>+</code>, <code>*</code>, etc.) and built-in functions (<code>min</code>, <code>max</code>, <code>round</code>, <code>sqrt</code>, ...).</p>
-          <button type="submit">{% if selected_ruleset %}Update{% else %}Save{% endif %}</button>
-        </form>
-      </section>
-
-      <section class="card" data-ui-region="ruleset-browser">
-        <h2>Existing rulesets</h2>
-        {% for ruleset in rulesets %}
-        <div class="rule-item">
-          <strong>#{{ ruleset.id }} {{ ruleset.name }}</strong>
-          <div class="meta">
-            {{ ruleset.product_name }} • <span class="category-pill">{{ ruleset.category }}</span> / {{ ruleset.subcategory }} • v{{ ruleset.version }} • {{ ruleset.environment }}
-          </div>
-          <form method="get" action="/" style="display:inline">
-            <input type="hidden" name="edit" value="{{ ruleset.id }}" />
-            <button type="submit">Edit</button>
-          </form>
-          <form method="post" action="/deploy/{{ ruleset.id }}" style="display:inline">
-            <input name="environment" value="{{ ruleset.environment }}" />
-            <button type="submit">Deploy</button>
-          </form>
+    <div class="page">
+      <div class="topbar">
+        <div>
+          <h1 style="margin:0">Rules Editor Workspace</h1>
+          <div class="muted">Design market-grade product rule catalogs with execution ordering and nested categorization.</div>
         </div>
-        {% else %}
-        <p>No rulesets yet.</p>
-        {% endfor %}
-      </section>
+        <form method="post" action="/logout"><button type="submit">Logout</button></form>
+      </div>
+
+      <div class="layout">
+        <section class="card products">
+          <h3>Products</h3>
+          <div id="productList" class="stack"></div>
+          <div class="stack" style="margin-top:.8rem">
+            <input id="newProductName" placeholder="New product name" />
+            <input id="newProductDescription" placeholder="Description" />
+            <button class="primary" onclick="createProduct()">Add product</button>
+          </div>
+        </section>
+
+        <section class="stack">
+          <article class="card">
+            <h3 id="activeProductTitle">Rules catalog</h3>
+            <div class="workspace" id="workspace"></div>
+          </article>
+
+          <article class="card" data-ui-region="ruleset-editor">
+            <h3>{% if selected_ruleset %}Edit ruleset #{{ selected_ruleset.id }}{% else %}Create ruleset{% endif %}</h3>
+            {% if parse_error %}<p style="color:#b91c1c">Unable to save rules: {{ parse_error }}</p>{% endif %}
+            <form method="post" action="/rulesets">
+              {% if selected_ruleset %}<input type="hidden" name="ruleset_id" value="{{ selected_ruleset.id }}" />{% endif %}
+              <div class="grid2">
+                <input name="name" value="{{ selected_ruleset.name if selected_ruleset else 'Default Rules' }}" placeholder="Name" />
+                <input name="environment" value="{{ selected_ruleset.environment if selected_ruleset else 'dev' }}" placeholder="Environment" />
+                <input id="rulesetProduct" name="product_name" value="{{ selected_ruleset.product_name if selected_ruleset else 'laptop' }}" placeholder="Product" />
+                <input type="number" min="1" name="version" value="{{ selected_ruleset.version if selected_ruleset else 1 }}" placeholder="Version" />
+                <input name="category" value="{{ selected_ruleset.category if selected_ruleset else 'pricing' }}" placeholder="Category" />
+                <input name="subcategory" value="{{ selected_ruleset.subcategory if selected_ruleset else 'discounts' }}" placeholder="Subcategory" />
+              </div>
+              <p class="muted">Rules DSL</p>
+              <textarea name="pseudo_rules" id="pseudo_rules">{{ selected_pseudocode if selected_pseudocode else "DEFAULT discount = 0.05\nCONSTRAINT quantity >= 1 :: Quantity must be at least 1\nCALC total_price = base_price * quantity * (1 - discount)" }}</textarea>
+              <details><summary>Raw JSON payload</summary><textarea name="payload">{{ selected_ruleset.payload if selected_ruleset else '' }}</textarea></details>
+              <div class="row" style="margin-top:.6rem"><button type="button" onclick="exportWorkspaceRules()">Load from workspace</button><button class="primary" type="submit">{% if selected_ruleset %}Update{% else %}Save{% endif %}</button></div>
+            </form>
+          </article>
+        
+          <article class="card" data-ui-region="ruleset-browser">
+            <h3>Existing rulesets</h3>
+            {% for ruleset in rulesets %}
+            <div class="row" style="justify-content:space-between; border-top:1px solid var(--border); padding-top:.45rem; margin-top:.45rem;">
+              <div><strong>#{{ ruleset.id }} {{ ruleset.name }}</strong><div class="muted">{{ ruleset.product_name }} / {{ ruleset.category }} / {{ ruleset.subcategory }} • v{{ ruleset.version }} • {{ ruleset.environment }}</div></div>
+              <div class="row"><form method="get" action="/"><input type="hidden" name="edit" value="{{ ruleset.id }}" /><button type="submit">Edit</button></form><form method="post" action="/deploy/{{ ruleset.id }}"><input name="environment" value="{{ ruleset.environment }}" style="width:80px"/><button type="submit">Deploy</button></form></div>
+            </div>
+            {% else %}<p class="muted">No rulesets yet.</p>{% endfor %}
+          </article>
+
+          <article class="card"><h3>Active deployments</h3><ul>{% for deployment in deployments %}<li>{{ deployment.environment }} => ruleset #{{ deployment.ruleset_id }} at {{ deployment.deployed_at }}</li>{% else %}<li>No deployments yet.</li>{% endfor %}</ul></article>
+</section>
+      </div>
     </div>
+    <script>
+      let workspaceData = { products: [] };
+      let activeProductId = null;
 
-    <section class="card" style="margin-top: 1rem;" data-ui-region="deployment-status">
-      <h2>Active deployments</h2>
-      <ul>
-        {% for deployment in deployments %}
-        <li>{{ deployment.environment }} => ruleset #{{ deployment.ruleset_id }} at {{ deployment.deployed_at }}</li>
-        {% else %}
-        <li>No deployments yet.</li>
-        {% endfor %}
-      </ul>
-    </section>
+      async function fetchJson(url, opts = {}) { const r = await fetch(url, { headers: { 'Content-Type':'application/json' }, ...opts }); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+      async function loadWorkspace() {
+        workspaceData = await fetchJson('/api/workspace');
+        if (!activeProductId && workspaceData.products.length) activeProductId = workspaceData.products[0].id;
+        renderProducts(); renderWorkspace();
+      }
+      function activeProduct(){ return workspaceData.products.find(p => p.id===activeProductId); }
+      function renderProducts(){
+        const node=document.getElementById('productList'); node.innerHTML='';
+        workspaceData.products.forEach(p=>{
+          const row=document.createElement('div'); row.className='row';
+          row.innerHTML=`<button class='${p.id===activeProductId?'active':''}' onclick='switchProduct(${p.id})'>${p.name}</button><button onclick='deleteProduct(${p.id})'>Delete</button>`;
+          node.appendChild(row);
+        });
+      }
+      function renderWorkspace(){
+        const product=activeProduct();
+        document.getElementById('activeProductTitle').textContent = product ? `Rules for ${product.name}` : 'Rules catalog';
+        document.getElementById('rulesetProduct').value = product ? product.name : '';
+        const root=document.getElementById('workspace'); root.innerHTML=''; if(!product) return;
+        product.categories.forEach(cat=>{
+          const box=document.createElement('div'); box.className='category';
+          box.innerHTML=`<div class='row'><strong>${cat.name}</strong><span class='pill'>category</span><button onclick='moveCategory(${cat.id},-1)'>↑</button><button onclick='moveCategory(${cat.id},1)'>↓</button><button onclick='renameCategory(${cat.id},"${cat.name}",${cat.position})'>Edit</button><button onclick='deleteCategory(${cat.id})'>Delete</button></div><button onclick='addSubcategory(${cat.id})'>+ Sub-category</button><button onclick='addRule(${cat.id}, null)'>+ Rule</button>`;
+          cat.rules.forEach(rule=> box.appendChild(renderRule(rule)));
+          cat.subcategories.forEach(sub=>{
+            const subBox=document.createElement('div'); subBox.className='category'; subBox.style.marginTop='.5rem';
+            subBox.innerHTML=`<div class='row'><strong>${sub.name}</strong><span class='pill'>sub-category</span><button onclick='renameCategory(${sub.id},"${sub.name}",${sub.position})'>Edit</button><button onclick='deleteCategory(${sub.id})'>Delete</button><button onclick='addRule(${cat.id}, ${sub.id})'>+ Rule</button></div>`;
+            sub.rules.forEach(rule=> subBox.appendChild(renderRule(rule)));
+            box.appendChild(subBox);
+          });
+          root.appendChild(box);
+        });
+        const add=document.createElement('button'); add.className='primary'; add.textContent='+ Category'; add.onclick=()=>addCategory(); root.appendChild(add);
+      }
+      function renderRule(rule){
+        const div=document.createElement('div'); div.className=`rule ${rule.is_editable?'':'readonly'}`;
+        if(!rule.is_editable){ div.innerHTML=`<div class='row'><span class='pill'>${rule.rule_type}</span><strong>#${rule.position}</strong><code>${rule.expression}</code><button onclick='setEditable(${rule.id},true)'>Edit</button><button onclick='moveRule(${rule.id},${rule.position-1})'>↑</button><button onclick='moveRule(${rule.id},${rule.position+1})'>↓</button><button onclick='deleteRule(${rule.id})'>Delete</button></div><div class='muted'>${rule.message || ''}</div>`; return div; }
+        div.innerHTML=`<div class='grid2'><select id='type-${rule.id}'><option ${rule.rule_type==='constraint'?'selected':''}>constraint</option><option ${rule.rule_type==='calculation'?'selected':''}>calculation</option><option ${rule.rule_type==='default'?'selected':''}>default</option></select><input id='target-${rule.id}' value='${rule.target || ''}' placeholder='target field (for default/calculation)'/><input id='expr-${rule.id}' value='${rule.expression}' placeholder='expression' style='grid-column:span 2'/><input id='msg-${rule.id}' value='${rule.message || ''}' placeholder='message (for constraints)' style='grid-column:span 2'/></div><div class='row'><button class='primary' onclick='saveRule(${rule.id},${rule.position})'>Save</button><button onclick='setEditable(${rule.id},false)'>Readonly</button></div>`;
+        return div;
+      }
 
-    <section class="card" style="margin-top: 1rem;" data-ui-region="frontend-extension-roadmap">
-      <h2>Frontend extension roadmap</h2>
-      <ul class="hint-list">
-        <li>Add a visual rule builder that maps to DSL and JSON in real time.</li>
-        <li>Attach rule impact previews with test fixtures per product family.</li>
-        <li>Enable inline validation badges for constraints and calculations.</li>
-      </ul>
-    </section>
+      async function createProduct(){ await fetchJson('/api/workspace/products',{method:'POST', body:JSON.stringify({name:newProductName.value, description:newProductDescription.value})}); newProductName.value=''; newProductDescription.value=''; await loadWorkspace(); }
+      async function switchProduct(id){ activeProductId=id; renderProducts(); renderWorkspace(); }
+      async function deleteProduct(id){ await fetchJson(`/api/workspace/products/${id}`,{method:'DELETE'}); if(activeProductId===id) activeProductId=null; await loadWorkspace(); }
+      async function addCategory(){ const p=activeProduct(); await fetchJson('/api/workspace/categories',{method:'POST', body:JSON.stringify({product_id:p.id, name:'New Category', position:(p.categories.length+1)})}); await loadWorkspace(); }
+      async function addSubcategory(parentId){ const p=activeProduct(); await fetchJson('/api/workspace/categories',{method:'POST', body:JSON.stringify({product_id:p.id,parent_id:parentId,name:'New Sub-category',position:99})}); await loadWorkspace(); }
+      async function renameCategory(id,name,position){ const next=prompt('Category name',name); if(!next) return; await fetchJson(`/api/workspace/categories/${id}`,{method:'PUT',body:JSON.stringify({name:next,position})}); await loadWorkspace(); }
+      async function moveCategory(id,delta){ const p=activeProduct(); const c=p.categories.find(x=>x.id===id); if(!c) return; await fetchJson(`/api/workspace/categories/${id}`,{method:'PUT', body:JSON.stringify({name:c.name, position:Math.max(1,(c.position||1)+delta)})}); await loadWorkspace(); }
+      async function deleteCategory(id){ await fetchJson(`/api/workspace/categories/${id}`,{method:'DELETE'}); await loadWorkspace(); }
+      async function addRule(categoryId,subcategoryId){ const p=activeProduct(); await fetchJson('/api/workspace/rules',{method:'POST',body:JSON.stringify({product_id:p.id,category_id:categoryId,subcategory_id:subcategoryId,rule_type:'constraint',expression:'quantity >= 1',message:'Required',position:99})}); await loadWorkspace(); }
+      async function setEditable(id,val){ await fetchJson(`/api/workspace/rules/${id}/editable`,{method:'POST',body:JSON.stringify({is_editable:val})}); await loadWorkspace(); }
+      async function saveRule(id,position){ await fetchJson(`/api/workspace/rules/${id}`,{method:'PUT',body:JSON.stringify({rule_type:document.getElementById(`type-${id}`).value,target:document.getElementById(`target-${id}`).value,expression:document.getElementById(`expr-${id}`).value,message:document.getElementById(`msg-${id}`).value,position,is_editable:true})}); await loadWorkspace(); }
+      async function moveRule(id,position){ await fetchJson(`/api/workspace/rules/${id}/position`,{method:'POST',body:JSON.stringify({position:Math.max(1,position)})}); await loadWorkspace(); }
+      async function deleteRule(id){ await fetchJson(`/api/workspace/rules/${id}`,{method:'DELETE'}); await loadWorkspace(); }
+      function exportWorkspaceRules(){
+        const p=activeProduct(); if(!p) return;
+        const lines=[];
+        p.categories.forEach(cat=>{ cat.rules.concat(...cat.subcategories.map(s=>s.rules)).sort((a,b)=>a.position-b.position).forEach(rule=>{
+          if(rule.rule_type==='calculation') lines.push(`CALC ${rule.target || 'result'} = ${rule.expression}`);
+          else if(rule.rule_type==='default') lines.push(`DEFAULT ${rule.target || 'field'} = ${rule.expression}`);
+          else lines.push(`CONSTRAINT ${rule.expression} :: ${rule.message || 'Rule violation'}`);
+        });});
+        document.getElementById('pseudo_rules').value = lines.join('\n');
+      }
+      loadWorkspace();
+    </script>
   </body>
 </html>
