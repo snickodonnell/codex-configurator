@@ -101,6 +101,26 @@ python -m sales_configurator experience --port 8003 --db ./data.db
 - Admin (full): `admin/admin`
 - Studio editor: `ux-admin/ux-admin`
 
+## Demo readiness quickstart
+
+Run the full automated suite (including end-to-end demo journey coverage):
+
+```bash
+pytest -q
+pytest -q tests/test_demo_readiness.py
+```
+
+Health checks for deployment probes:
+
+```bash
+curl -s http://localhost:8000/healthz
+curl -s http://localhost:8001/healthz
+curl -s http://localhost:8002/healthz
+curl -s http://localhost:8003/healthz
+```
+
+For a full pre-demo checklist, see [Demo Deployment Checklist](docs/demo-deployment-checklist.md).
+
 ## Docs
 
 - [Configuration Engine Wiki](docs/configuration-engine-wiki.md)
