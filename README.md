@@ -6,28 +6,30 @@ This repository contains an MVP sales-configuration platform with **three indepe
 2. **Rules Engine App** – manages rule authoring and environment deployment.
 3. **Configurator Front-End App** – customer-facing configuration workflow that consumes deployed rules.
 
-The implementation favors minimal dependencies and strong defaults so you can extend safely later.
+The implementation favors minimal dependencies, deterministic rules processing, and architecture that can grow into more advanced rule authoring and UI workflows.
 
 ## Why this stack
 
 - **Python + Flask** for fast MVP delivery and low operational complexity.
 - **SQLite** for local persistence and reproducible development/test setup.
 - **Safe AST-based rule evaluation** for boolean logic and dynamic calculations.
+- **Compiled rule engine core** that separates parsing, compilation, and runtime evaluation.
 - **Discrete optimization routine** (combinatorial search) to support advanced mathematical optimization in rules workflows.
 
 ## Features implemented
 
 - Admin landing page with launch links and portfolio visibility for rulesets, front-end enhancements, and end-user configuration activity.
-- Ruleset CRUD-lite (create + list).
+- Ruleset CRUD-lite (create + list + edit).
 - Environment deployments (`dev`, `prod`, etc.) with active ruleset mapping.
 - Customer access control per environment via API key.
 - Config evaluation endpoint:
+  - applies static and dynamic default values
   - validates constraints (boolean logic)
   - computes formulas (dynamic calculations)
 - Configuration state persistence.
 - Final submission persistence as specifications.
 - Optimization endpoint (`/optimize`) to find best valid configuration from domains/objective.
-- Test suite for rule safety, evaluation, optimization, and app integration.
+- Expanded test suite covering safety checks, parser errors, custom functions, constraint violations, optimization edge cases, app auth flows, and persistence behavior.
 
 ## Project layout
 
@@ -35,16 +37,29 @@ The implementation favors minimal dependencies and strong defaults so you can ex
 src/sales_configurator/
   app.py                 # Flask app factories and routes
   db.py                  # schema + db helpers
-  rules_engine.py        # safe evaluator + optimization engine
+  rules_engine.py        # rule compilation, safe evaluator, optimization engine
   __main__.py            # CLI launcher for each service
   templates/
     landing/index.html
     rules_engine/index.html
     configurator/index.html
+docs/
+  configuration-engine-wiki.md
 tests/
   test_rules_engine.py
   test_apps.py
 ```
+
+## Engine architecture
+
+The rules engine now uses a reusable `RuleEngine` abstraction:
+
+1. **Normalize** the incoming ruleset shape.
+2. **Compile** constraints, calculations, defaults, and objective expressions into validated AST programs.
+3. **Evaluate** with a runtime context while preserving safety restrictions.
+4. **Optimize** by evaluating only valid candidates and scoring objective programs against resolved configuration + calculated fields.
+
+This structure makes it easier to add advanced capabilities (rule libraries, scenario simulation, partial evaluation, caching strategies) without tightly coupling logic to Flask route handlers.
 
 ## Quickstart
 
@@ -84,7 +99,7 @@ Demo credentials in configurator UI:
 
 ## Authentication
 
-Both web apps now require a session-based admin login before access.
+Both web apps require a session-based admin login before access.
 
 - username: `admin`
 - password: `admin`
