@@ -89,6 +89,30 @@ class Violation:
 
 
 @dataclass(slots=True)
+class RuleExecutionTraceResult:
+    valid: bool
+    resolved_configuration: dict[str, Any]
+    calculations: dict[str, float]
+    violations: list[dict[str, Any]]
+    steps: list[dict[str, Any]]
+
+
+@dataclass(slots=True)
+class WorkspaceRuleViolation:
+    rule_id: int | None
+    category: str
+    subcategory: str
+    message: str
+    expression: str
+
+
+@dataclass(slots=True)
+class WorkspaceRuleEvaluationResult:
+    valid: bool
+    violations: list[WorkspaceRuleViolation]
+
+
+@dataclass(slots=True)
 class _CalculationSpec:
     name: str
     program: ExpressionProgram
@@ -141,6 +165,16 @@ class _DefaultSpec:
     mode: str
     value: Any = None
     rules: list[_DynamicRuleSpec] | None = None
+
+
+@dataclass(slots=True)
+class _WorkspaceRuleSpec:
+    rule_id: int | None
+    category: str
+    subcategory: str
+    message: str
+    expression: str
+    program: ExpressionProgram
 
 
 @dataclass(slots=True)
@@ -294,6 +328,57 @@ class RuleEngine:
             raise ValueError("No valid configuration found for provided domains/rules")
 
         return best_config
+
+
+@dataclass(slots=True)
+class WorkspaceRuleEngine:
+    rules: list[_WorkspaceRuleSpec]
+    functions: dict[str, Callable[..., Any]]
+
+    @classmethod
+    def from_rules(
+        cls,
+        rules: list[dict[str, Any]],
+        extra_functions: dict[str, Callable[..., Any]] | None = None,
+    ) -> WorkspaceRuleEngine:
+        functions = _resolve_eval_functions(extra_functions)
+        compiled_rules: list[_WorkspaceRuleSpec] = []
+        for rule in rules:
+            expression = str(rule.get("expression") or "")
+            if not expression.strip():
+                continue
+            compiled_rules.append(
+                _WorkspaceRuleSpec(
+                    rule_id=_int_or_none(rule.get("id")),
+                    category=str(rule.get("category_name") or ""),
+                    subcategory=str(rule.get("subcategory_name") or ""),
+                    message=str(rule.get("message") or "Workspace rule failed"),
+                    expression=expression,
+                    program=compile_expression(expression, functions),
+                )
+            )
+        return cls(rules=compiled_rules, functions=functions)
+
+    def evaluate(self, context: dict[str, Any]) -> WorkspaceRuleEvaluationResult:
+        violations: list[WorkspaceRuleViolation] = []
+        for rule in self.rules:
+            try:
+                passed = bool(evaluate_program(rule.program, context, self.functions))
+            except Exception:
+                passed = False
+            if passed:
+                continue
+            violations.append(
+                WorkspaceRuleViolation(
+                    rule_id=rule.rule_id,
+                    category=rule.category,
+                    subcategory=rule.subcategory,
+                    message=rule.message,
+                    expression=rule.expression,
+                )
+            )
+
+        return WorkspaceRuleEvaluationResult(valid=(len(violations) == 0), violations=violations)
 
 
 def register_custom_function(name: str, function: Callable[..., Any]) -> None:
@@ -758,3 +843,173 @@ def optimize_configuration(
 ) -> dict[str, Any]:
     engine = RuleEngine.from_ruleset(ruleset)
     return engine.optimize(domains=domains, objective=objective, maximize=maximize)
+
+
+def evaluate_workspace_rules(
+    rules: list[dict[str, Any]],
+    context: dict[str, Any],
+) -> WorkspaceRuleEvaluationResult:
+    engine = WorkspaceRuleEngine.from_rules(rules)
+    return engine.evaluate(context)
+
+
+
+
+
+def trace_ruleset_execution(ruleset: dict[str, Any], configuration: dict[str, Any]) -> RuleExecutionTraceResult:
+    engine = RuleEngine.from_ruleset(ruleset)
+    resolved_configuration = {**configuration}
+    steps: list[dict[str, Any]] = []
+
+    for default in engine.defaults:
+        if default.name in resolved_configuration:
+            steps.append(
+                {
+                    "phase": "default",
+                    "name": default.name,
+                    "status": "skipped",
+                    "reason": "provided_by_input",
+                    "value": _safe_snapshot_value(default.name, resolved_configuration.get(default.name)),
+                }
+            )
+            continue
+
+        if default.mode == "static":
+            resolved_configuration[default.name] = default.value
+            steps.append(
+                {
+                    "phase": "default",
+                    "name": default.name,
+                    "status": "applied",
+                    "mode": "static",
+                    "value": _safe_snapshot_value(default.name, default.value),
+                }
+            )
+            continue
+
+        applied = False
+        for index, rule in enumerate(default.rules or [], start=1):
+            condition_result = True
+            condition_raw = None
+            if rule.condition is not None:
+                condition_raw = rule.condition.source
+                condition_result = bool(evaluate_program(rule.condition, resolved_configuration, engine.functions))
+            steps.append(
+                {
+                    "phase": "default",
+                    "name": default.name,
+                    "status": "candidate",
+                    "candidate_index": index,
+                    "condition": condition_raw,
+                    "condition_result": condition_result,
+                }
+            )
+            if not condition_result:
+                continue
+
+            if rule.formula is not None:
+                value = evaluate_program(rule.formula, resolved_configuration, engine.functions)
+                mode = "dynamic_formula"
+                formula = rule.formula.source
+            else:
+                value = rule.value
+                mode = "dynamic_value"
+                formula = None
+            resolved_configuration[default.name] = value
+            steps.append(
+                {
+                    "phase": "default",
+                    "name": default.name,
+                    "status": "applied",
+                    "mode": mode,
+                    "candidate_index": index,
+                    "formula": formula,
+                    "value": _safe_snapshot_value(default.name, value),
+                }
+            )
+            applied = True
+            break
+
+        if not applied:
+            raise ValueError(f"no dynamic default matched for field: {default.name}")
+
+    violations: list[Violation] = []
+    for constraint in engine.constraints:
+        outcome = bool(evaluate_program(constraint.program, resolved_configuration, engine.functions))
+        steps.append(
+            {
+                "phase": "constraint",
+                "expression": constraint.expression_raw,
+                "reason_code": constraint.code,
+                "recommended_severity": constraint.recommended_severity,
+                "passed": outcome,
+                "rule_index": constraint.rule_index,
+            }
+        )
+        if outcome:
+            continue
+        referenced_variables = sorted(extract_expression_variables(constraint.expression_raw))
+        snapshot = {
+            variable: _safe_snapshot_value(variable, resolved_configuration.get(variable))
+            for variable in referenced_variables
+            if variable in resolved_configuration
+        }
+        violation_meta: dict[str, Any] = {
+            "expression_raw": constraint.expression_raw,
+            "referenced_variables": referenced_variables,
+            "snapshot": snapshot,
+            "evaluated_to": False,
+            "rule_index": constraint.rule_index,
+            "severity": {
+                "recommended": constraint.recommended_severity,
+                "source": "rules_engine",
+                "overrideable_by": "experience_studio",
+            },
+        }
+        if constraint.line_number is not None:
+            violation_meta["line_number"] = constraint.line_number
+        violations.append(
+            Violation(
+                code=constraint.code,
+                recommended_severity=constraint.recommended_severity,
+                meta=violation_meta,
+                rule={"type": "CONSTRAINT", "raw": constraint.expression_raw},
+            )
+        )
+
+    calculations: dict[str, float] = {}
+    working_context = {**resolved_configuration}
+    for calc in engine.calculations:
+        value = evaluate_program(calc.program, working_context, engine.functions)
+        calculations[calc.name] = float(value)
+        working_context[calc.name] = value
+        steps.append(
+            {
+                "phase": "calculation",
+                "name": calc.name,
+                "formula": calc.program.source,
+                "value": float(value),
+            }
+        )
+
+    return RuleExecutionTraceResult(
+        valid=(len(violations) == 0),
+        resolved_configuration=resolved_configuration,
+        calculations=calculations,
+        violations=[
+            {
+                "code": violation.code,
+                "recommended_severity": violation.recommended_severity,
+                "meta": violation.meta,
+                "rule": violation.rule,
+            }
+            for violation in violations
+        ],
+        steps=steps,
+    )
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

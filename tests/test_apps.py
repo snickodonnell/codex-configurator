@@ -828,3 +828,36 @@ def test_rules_engine_logs_workflow_state_changes(tmp_path, caplog) -> None:
     assert response.status_code == 302
 
     assert any(record.message == "workflow_state_changed" for record in caplog.records)
+
+
+def test_rules_trace_api_returns_stepwise_trace_for_pseudocode(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    app = create_rules_engine_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    response = client.post(
+        "/api/trace",
+        json={
+            "pseudo_rules": "DEFAULT discount = 0.1\nCONSTRAINT quantity >= 1 :: ERR_QTY\nCALC total = quantity * base_price * (1-discount)",
+            "configuration": {"quantity": 2, "base_price": 10},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["valid"] is True
+    assert body["calculations"]["total"] == 18.0
+    assert [step["phase"] for step in body["steps"]] == ["default", "constraint", "calculation"]
+
+
+def test_rules_trace_api_requires_object_configuration(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    app = create_rules_engine_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    response = client.post("/api/trace", json={"pseudo_rules": "CONSTRAINT quantity >= 1", "configuration": []})
+
+    assert response.status_code == 400
+    assert "configuration must be an object" in response.get_json()["error"]

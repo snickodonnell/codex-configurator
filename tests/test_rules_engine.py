@@ -7,6 +7,8 @@ from sales_configurator.rules_engine import (
     compile_expression,
     evaluate_program,
     evaluate_rules,
+    evaluate_workspace_rules,
+    trace_ruleset_execution,
     infer_memo_parameters,
     extract_expression_variables,
     normalize_ruleset,
@@ -347,3 +349,76 @@ def test_constraint_violation_metadata_sanitizes_complex_objects() -> None:
 def test_extract_expression_variables_for_constraint_metadata() -> None:
     variables = extract_expression_variables("quantity >= min_qty and discount <= max_discount")
     assert variables == {"quantity", "min_qty", "discount", "max_discount"}
+
+
+def test_evaluate_workspace_rules_reports_violations_without_ui_dependencies() -> None:
+    workspace_rules = [
+        {
+            "id": 10,
+            "category_name": "Pricing",
+            "subcategory_name": "Discount",
+            "expression": "discount <= 0.2",
+            "message": "Discount too high",
+        },
+        {
+            "id": 11,
+            "category_name": "Sizing",
+            "subcategory_name": "",
+            "expression": "quantity >= 1",
+            "message": "Quantity required",
+        },
+    ]
+
+    result = evaluate_workspace_rules(workspace_rules, {"discount": 0.25, "quantity": 0})
+
+    assert result.valid is False
+    assert [violation.rule_id for violation in result.violations] == [10, 11]
+    assert result.violations[0].category == "Pricing"
+    assert result.violations[0].message == "Discount too high"
+
+
+def test_evaluate_workspace_rules_treats_expression_errors_as_failures() -> None:
+    workspace_rules = [
+        {
+            "id": 99,
+            "category_name": "Validation",
+            "subcategory_name": "",
+            "expression": "unknown_value > 0",
+            "message": "Unknown value is required",
+        }
+    ]
+
+    result = evaluate_workspace_rules(workspace_rules, {})
+
+    assert result.valid is False
+    assert result.violations[0].rule_id == 99
+
+
+def test_trace_ruleset_execution_produces_stepwise_output() -> None:
+    traced = trace_ruleset_execution(
+        {
+            "default_values": [{"name": "discount", "mode": "static", "value": 0.1}],
+            "constraints": [{"expression": "quantity >= 1", "reason_code": "ERR_QTY"}],
+            "calculations": [{"name": "total", "formula": "quantity * base_price * (1-discount)"}],
+        },
+        {"quantity": 2, "base_price": 100},
+    )
+
+    assert traced.valid is True
+    assert traced.resolved_configuration["discount"] == 0.1
+    assert traced.calculations["total"] == 180.0
+    assert [step["phase"] for step in traced.steps] == ["default", "constraint", "calculation"]
+
+
+def test_trace_ruleset_execution_includes_failed_constraint_details() -> None:
+    traced = trace_ruleset_execution(
+        {
+            "constraints": [{"expression": "quantity >= 1", "reason_code": "ERR_QTY"}],
+            "calculations": [],
+        },
+        {"quantity": 0},
+    )
+
+    assert traced.valid is False
+    assert traced.violations[0]["code"] == "ERR_QTY"
+    assert traced.steps[0]["passed"] is False
