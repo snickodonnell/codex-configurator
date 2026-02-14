@@ -15,6 +15,10 @@
       .rule.readonly { opacity: .95; }
       .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
       .status { min-height: 1.2rem; }
+      .trace-steps { max-height: 240px; overflow: auto; margin: .4rem 0 0; padding-left: 1.2rem; }
+      .trace-steps li { padding: .2rem .3rem; border-radius: 8px; }
+      .trace-steps li.active { background: #eef6ff; }
+      .trace-details { margin-top: .6rem; background: #0b1020; color: #e2e8f0; padding: .7rem; border-radius: 10px; font-size: .85rem; overflow-x: auto; }
       @media (max-width: 1100px) {
         .layout { grid-template-columns: 1fr; }
         .workspace { grid-template-columns: 1fr; }
@@ -70,6 +74,23 @@
                 <button class="primary" type="submit">{% if selected_ruleset %}Update{% else %}Save{% endif %}</button>
               </div>
             </form>
+          </article>
+
+
+          <article class="card" data-ui-region="rule-trace">
+            <h3>Rule Execution Trace</h3>
+            <p class="muted">Run the current DSL against sample input and step through defaults, constraints, and calculations.</p>
+            <div class="grid2">
+              <textarea id="traceInput" style="min-height:120px;grid-column:span 2">{"quantity": 1, "base_price": 100, "discount": 0.05, "region": "NA"}</textarea>
+            </div>
+            <div class="row" style="margin-top:.6rem">
+              <button id="runTraceBtn" class="primary" type="button">Run trace</button>
+              <button id="tracePrevBtn" type="button">◀ Prev step</button>
+              <button id="traceNextBtn" type="button">Next step ▶</button>
+            </div>
+            <div id="traceSummary" class="status muted" role="status" aria-live="polite"></div>
+            <ol id="traceSteps" class="trace-steps"></ol>
+            <pre id="traceDetails" class="trace-details">Run a trace to inspect step details.</pre>
           </article>
 
           <article class="card" data-ui-region="ruleset-browser">
@@ -451,6 +472,77 @@
         await loadWorkspace();
       }
 
+
+      var traceState = { steps: [], index: -1, summary: null };
+
+      function setTraceSummary(message, isError) {
+        var node = document.getElementById("traceSummary");
+        node.textContent = message || "";
+        node.style.color = isError ? "#b91c1c" : "";
+      }
+
+      function renderTraceStepList() {
+        var node = document.getElementById("traceSteps");
+        node.innerHTML = "";
+        traceState.steps.forEach(function (step, index) {
+          var item = document.createElement("li");
+          if (index === traceState.index) item.className = "active";
+          item.textContent = (index + 1) + ". [" + step.phase + "] " + (step.name || step.expression || step.reason_code || "step");
+          item.addEventListener("click", function () {
+            traceState.index = index;
+            renderTraceDetails();
+            renderTraceStepList();
+          });
+          node.appendChild(item);
+        });
+      }
+
+      function renderTraceDetails() {
+        var detail = document.getElementById("traceDetails");
+        if (!traceState.steps.length || traceState.index < 0) {
+          detail.textContent = "Run a trace to inspect step details.";
+          return;
+        }
+        detail.textContent = JSON.stringify(traceState.steps[traceState.index], null, 2);
+      }
+
+      function moveTrace(delta) {
+        if (!traceState.steps.length) return;
+        var next = traceState.index + delta;
+        traceState.index = Math.max(0, Math.min(traceState.steps.length - 1, next));
+        renderTraceStepList();
+        renderTraceDetails();
+      }
+
+      async function runTrace() {
+        var configuration;
+        try {
+          configuration = JSON.parse(document.getElementById("traceInput").value || "{}");
+        } catch (error) {
+          setTraceSummary("Invalid trace input JSON: " + error.message, true);
+          return;
+        }
+
+        try {
+          var payload = {
+            pseudo_rules: document.getElementById("pseudo_rules").value,
+            configuration: configuration
+          };
+          var response = await fetchJson("/api/trace", { method: "POST", body: JSON.stringify(payload) });
+          traceState.steps = response.steps || [];
+          traceState.index = traceState.steps.length ? 0 : -1;
+          traceState.summary = response;
+          setTraceSummary(
+            "Trace complete: " + traceState.steps.length + " steps, " + (response.valid ? "ruleset valid" : "violations detected"),
+            !response.valid
+          );
+          renderTraceStepList();
+          renderTraceDetails();
+        } catch (error) {
+          setTraceSummary("Trace failed: " + error.message, true);
+        }
+      }
+
       function exportWorkspaceRules() {
         var product = activeProduct();
         if (!product) return;
@@ -483,6 +575,9 @@
       });
 
       document.getElementById("loadWorkspaceRulesBtn").addEventListener("click", exportWorkspaceRules);
+      document.getElementById("runTraceBtn").addEventListener("click", runTrace);
+      document.getElementById("tracePrevBtn").addEventListener("click", function () { moveTrace(-1); });
+      document.getElementById("traceNextBtn").addEventListener("click", function () { moveTrace(1); });
 
       loadWorkspace();
     </script>

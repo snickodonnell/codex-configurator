@@ -13,13 +13,13 @@ from .db import connect, init_db, json_dumps
 from .rules_engine import (
     RulesParseError,
     evaluate_rules,
-    evaluate_program,
+    evaluate_workspace_rules,
     infer_memo_parameters,
     normalize_ruleset,
     optimize_configuration,
     parse_ruleset_pseudocode,
-    compile_expression,
     ruleset_to_pseudocode,
+    trace_ruleset_execution,
 )
 
 
@@ -687,6 +687,50 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
             conn.execute("DELETE FROM workspace_rules WHERE id = ?", (rule_id,))
         return jsonify({"status": "deleted"})
 
+    @app.post("/api/trace")
+    def trace_ruleset() -> Any:
+        body = _json_body()
+        configuration = body.get("configuration", {})
+        if not isinstance(configuration, dict):
+            return jsonify({"error": "configuration must be an object"}), 400
+
+        conn = connect(_db_path(app))
+        ruleset_payload: dict[str, Any]
+        ruleset_id = body.get("ruleset_id")
+        pseudo_rules = str(body.get("pseudo_rules") or "").strip()
+        payload = body.get("payload")
+
+        try:
+            if ruleset_id is not None:
+                row = conn.execute("SELECT payload FROM rulesets WHERE id = ?", (int(ruleset_id),)).fetchone()
+                if row is None:
+                    return jsonify({"error": "ruleset not found"}), 404
+                ruleset_payload = normalize_ruleset(json.loads(row["payload"]))
+            elif pseudo_rules:
+                ruleset_payload = parse_ruleset_pseudocode(pseudo_rules)
+            elif payload:
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                if not isinstance(payload, dict):
+                    raise ValueError("payload must be a JSON object")
+                ruleset_payload = normalize_ruleset(payload)
+            else:
+                return jsonify({"error": "provide ruleset_id, pseudo_rules, or payload"}), 400
+
+            traced = trace_ruleset_execution(ruleset_payload, configuration)
+        except (ValueError, TypeError, json.JSONDecodeError, RulesParseError) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        return jsonify(
+            {
+                "valid": traced.valid,
+                "resolved_configuration": traced.resolved_configuration,
+                "calculations": traced.calculations,
+                "violations": traced.violations,
+                "steps": traced.steps,
+            }
+        )
+
     @app.post("/rulesets")
     def create_ruleset() -> Any:
         payload = request.form.get("payload", "").strip()
@@ -1288,23 +1332,18 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
         )
 
         context = {**evaluated.resolved_configuration, **evaluated.calculations}
-        studio_violations: list[dict[str, Any]] = []
-        for workspace_rule in _workspace_rules_for_product(conn, int(row["workspace_product_id"])):
-            passed = True
-            try:
-                passed = bool(evaluate_program(compile_expression(str(workspace_rule["expression"])), context))
-            except Exception:
-                passed = False
-            if not passed:
-                studio_violations.append(
-                    {
-                        "rule_id": workspace_rule["id"],
-                        "category": workspace_rule["category_name"],
-                        "subcategory": workspace_rule.get("subcategory_name") or "",
-                        "message": workspace_rule["message"] or "Workspace rule failed",
-                        "expression": workspace_rule["expression"],
-                    }
-                )
+        workspace_rules = _workspace_rules_for_product(conn, int(row["workspace_product_id"]))
+        workspace_evaluation = evaluate_workspace_rules(workspace_rules, context)
+        studio_violations = [
+            {
+                "rule_id": violation.rule_id,
+                "category": violation.category,
+                "subcategory": violation.subcategory,
+                "message": violation.message,
+                "expression": violation.expression,
+            }
+            for violation in workspace_evaluation.violations
+        ]
 
         status = "ready" if evaluated.valid and not studio_violations else "attention_required"
         project_status = "configured" if status == "ready" else "in_progress"
