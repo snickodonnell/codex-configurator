@@ -183,6 +183,22 @@ def test_ruleset_create_from_pseudocode(tmp_path) -> None:
     assert "availability" in html
 
 
+
+
+def test_configuration_memo_schema_endpoint(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    app = create_configurator_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    response = client.get("/api/configuration-memo?environment=dev")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["product_name"] == "default-product"
+    assert any(param["name"] == "quantity" for param in body["required_input"])
+    assert any(param["parameter_class"] == "intermediate" for param in body["intermediate"])
+
+
 def test_evaluate_and_submit(tmp_path) -> None:
     db = tmp_path / "app.db"
     rules = create_rules_engine_app(str(db))
@@ -212,6 +228,12 @@ def test_evaluate_and_submit(tmp_path) -> None:
     body = evaluate.get_json()
     assert body["resolved_configuration"]["discount"] == 0
     assert body["calculations"]["total"] == 30.0
+    assert body["configuration_memo"]["schema"]["version"] == 1
+
+    conn = connect(db)
+    memo_row = conn.execute("SELECT status, memo FROM configuration_memos ORDER BY id DESC LIMIT 1").fetchone()
+    assert memo_row["status"] == "draft"
+    assert json.loads(memo_row["memo"])["resolved"]["discount"] == 0
 
     submit = client.post(
         "/api/submit",
@@ -224,6 +246,9 @@ def test_evaluate_and_submit(tmp_path) -> None:
     )
     assert submit.status_code == 200
     assert submit.get_json()["status"] == "submitted"
+
+    submitted_row = conn.execute("SELECT status FROM configuration_memos ORDER BY id DESC LIMIT 1").fetchone()
+    assert submitted_row["status"] == "submitted"
 
 
 def test_evaluate_forbidden_with_wrong_api_key(tmp_path) -> None:

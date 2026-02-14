@@ -218,13 +218,107 @@ def normalize_ruleset(ruleset: dict[str, Any] | None) -> dict[str, Any]:
         "constraints": list(base.get("constraints", [])),
         "calculations": list(base.get("calculations", [])),
         "custom_functions": list(base.get("custom_functions", [])),
+        "memo_parameters": list(base.get("memo_parameters", [])),
         **{
             key: value
             for key, value in base.items()
             if key
-            not in {"default_values", "constraints", "calculations", "schema_version", "custom_functions"}
+            not in {
+                "default_values",
+                "constraints",
+                "calculations",
+                "schema_version",
+                "custom_functions",
+                "memo_parameters",
+            }
         },
     }
+
+
+def expression_references(expression: str) -> set[str]:
+    tree = ast.parse(expression, mode="eval")
+    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+
+
+def infer_memo_parameters(ruleset: dict[str, Any] | None) -> list[dict[str, Any]]:
+    normalized = normalize_ruleset(ruleset)
+    parameters: dict[str, dict[str, Any]] = {}
+
+    for raw_param in normalized.get("memo_parameters", []):
+        name = str(raw_param.get("name", "")).strip()
+        if not name:
+            continue
+        param = {
+            "name": name,
+            "label": raw_param.get("label", name.replace("_", " ").title()),
+            "data_type": raw_param.get("data_type", "string"),
+            "parameter_class": raw_param.get("parameter_class", "required_input"),
+            "rules_engine_property": raw_param.get("rules_engine_property", name),
+            "inferred": bool(raw_param.get("inferred", False)),
+        }
+        parameters[name] = param
+
+    output_names = {str(item.get("name")) for item in normalized.get("default_values", [])}
+    output_names.update(str(item.get("name")) for item in normalized.get("calculations", []))
+
+    names_referenced: set[str] = set()
+    for constraint in normalized.get("constraints", []):
+        names_referenced.update(expression_references(str(constraint["expression"])))
+    for calc in normalized.get("calculations", []):
+        names_referenced.update(expression_references(str(calc["formula"])))
+    for default in normalized.get("default_values", []):
+        for rule in default.get("rules", []):
+            if rule.get("condition"):
+                names_referenced.update(expression_references(str(rule["condition"])))
+            if rule.get("formula"):
+                names_referenced.update(expression_references(str(rule["formula"])))
+
+    for custom in normalized.get("custom_functions", []):
+        args = {str(arg) for arg in custom.get("args", [])}
+        refs = expression_references(str(custom.get("expression", ""))) - args
+        names_referenced.update(refs)
+
+    allowed_function_names = set(ALLOWED_FUNCTIONS) | set(CUSTOM_FUNCTIONS)
+    allowed_function_names.update(str(item.get("name")) for item in normalized.get("custom_functions", []))
+    candidate_inputs = names_referenced - output_names - allowed_function_names
+
+    for name in sorted(candidate_inputs):
+        if name in parameters:
+            continue
+        parameters[name] = {
+            "name": name,
+            "label": name.replace("_", " ").title(),
+            "data_type": "number",
+            "parameter_class": "required_input",
+            "rules_engine_property": name,
+            "inferred": True,
+        }
+
+    for default_name in sorted(str(item.get("name")) for item in normalized.get("default_values", [])):
+        if default_name in parameters:
+            continue
+        parameters[default_name] = {
+            "name": default_name,
+            "label": default_name.replace("_", " ").title(),
+            "data_type": "number",
+            "parameter_class": "optional_input",
+            "rules_engine_property": default_name,
+            "inferred": True,
+        }
+
+    for calc_name in sorted(str(item.get("name")) for item in normalized.get("calculations", [])):
+        if calc_name in parameters:
+            continue
+        parameters[calc_name] = {
+            "name": calc_name,
+            "label": calc_name.replace("_", " ").title(),
+            "data_type": "number",
+            "parameter_class": "intermediate",
+            "rules_engine_property": calc_name,
+            "inferred": True,
+        }
+
+    return sorted(parameters.values(), key=lambda item: item["name"])
 
 
 def _resolve_eval_functions(extra_functions: dict[str, Callable[..., Any]] | None = None) -> dict[str, Callable[..., Any]]:

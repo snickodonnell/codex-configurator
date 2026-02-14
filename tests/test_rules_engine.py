@@ -7,6 +7,7 @@ from sales_configurator.rules_engine import (
     compile_expression,
     evaluate_program,
     evaluate_rules,
+    infer_memo_parameters,
     normalize_ruleset,
     optimize_configuration,
     parse_ruleset_pseudocode,
@@ -186,12 +187,31 @@ def test_invalid_default_mode_raises() -> None:
         evaluate_rules(ruleset, {})
 
 
+
+
+def test_infer_memo_parameters_includes_inputs_optional_and_intermediate() -> None:
+    ruleset = {
+        "constraints": [{"expression": "quantity >= 1 and region == 'NA'", "message": "bad"}],
+        "default_values": [{"name": "discount", "mode": "static", "value": 0.1}],
+        "calculations": [{"name": "total", "formula": "quantity * base_price * (1-discount)"}],
+    }
+    memo_params = infer_memo_parameters(ruleset)
+    classes = {item["name"]: item["parameter_class"] for item in memo_params}
+
+    assert classes["quantity"] == "required_input"
+    assert classes["base_price"] == "required_input"
+    assert classes["region"] == "required_input"
+    assert classes["discount"] == "optional_input"
+    assert classes["total"] == "intermediate"
+
+
 def test_normalize_ruleset_for_compatibility() -> None:
-    normalized = normalize_ruleset({"constraints": [{"expression": "x > 0", "message": "bad"}], "custom": True})
+    normalized = normalize_ruleset({"constraints": [{"expression": "x > 0", "message": "bad"}], "memo_parameters": [{"name": "x"}], "custom": True})
     assert normalized["schema_version"] == 1
     assert normalized["constraints"][0]["expression"] == "x > 0"
     assert normalized["calculations"] == []
     assert normalized["default_values"] == []
+    assert normalized["memo_parameters"][0]["name"] == "x"
     assert normalized["custom"] is True
 
 
