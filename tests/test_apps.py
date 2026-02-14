@@ -75,10 +75,33 @@ def test_ruleset_create_and_deploy(tmp_path) -> None:
         data={
             "name": "test",
             "environment": "dev",
+            "product_name": "laptop",
+            "category": "pricing",
+            "subcategory": "discounts",
+            "version": "1",
             "payload": '{"constraints":[{"expression":"quantity>=1","message":"x"}],"calculations":[]}',
         },
     )
     assert response.status_code == 302
+
+    edit_page = client.get("/?edit=1")
+    assert edit_page.status_code == 200
+    assert "pricing" in edit_page.get_data(as_text=True)
+
+    update = client.post(
+        "/rulesets",
+        data={
+            "ruleset_id": "1",
+            "name": "test-updated",
+            "environment": "dev",
+            "product_name": "laptop",
+            "category": "pricing",
+            "subcategory": "discounts",
+            "version": "2",
+            "payload": '{"constraints":[{"expression":"quantity>=1","message":"x"}],"calculations":[]}',
+        },
+    )
+    assert update.status_code == 302
 
     response = client.post("/deploy/1", data={"environment": "dev"})
     assert response.status_code == 302
@@ -129,3 +152,30 @@ def test_evaluate_and_submit(tmp_path) -> None:
     )
     assert submit.status_code == 200
     assert submit.get_json()["status"] == "submitted"
+
+
+def test_ruleset_create_from_pseudocode(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    app = create_rules_engine_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    response = client.post(
+        "/rulesets",
+        data={
+            "name": "dsl-rules",
+            "environment": "dev",
+            "product_name": "desktop",
+            "category": "availability",
+            "subcategory": "stock",
+            "version": "1",
+            "pseudo_rules": "DEFAULT discount = 0.05\nCONSTRAINT quantity >= 1 :: Quantity required\nCALC total = base_price * quantity * (1-discount)",
+        },
+    )
+    assert response.status_code == 302
+
+    page = client.get("/")
+    assert page.status_code == 200
+    html = page.get_data(as_text=True)
+    assert "dsl-rules" in html
+    assert "availability" in html

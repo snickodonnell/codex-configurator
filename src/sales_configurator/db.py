@@ -10,6 +10,10 @@ CREATE TABLE IF NOT EXISTS rulesets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     environment TEXT NOT NULL,
+    product_name TEXT NOT NULL DEFAULT 'default-product',
+    category TEXT NOT NULL DEFAULT 'general',
+    subcategory TEXT NOT NULL DEFAULT 'default',
+    version INTEGER NOT NULL DEFAULT 1,
     payload TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -64,8 +68,27 @@ def init_db(db_path: str | Path) -> None:
     conn = connect(db_path)
     with conn:
         conn.executescript(SCHEMA)
+        migrate_rulesets_schema(conn)
         seed_default_access(conn)
         seed_default_enhancements(conn)
+
+
+def migrate_rulesets_schema(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(rulesets)").fetchall()}
+    if "product_name" not in columns:
+        conn.execute("ALTER TABLE rulesets ADD COLUMN product_name TEXT NOT NULL DEFAULT 'default-product'")
+    if "category" not in columns:
+        conn.execute("ALTER TABLE rulesets ADD COLUMN category TEXT NOT NULL DEFAULT 'general'")
+    if "subcategory" not in columns:
+        conn.execute("ALTER TABLE rulesets ADD COLUMN subcategory TEXT NOT NULL DEFAULT 'default'")
+    if "version" not in columns:
+        conn.execute("ALTER TABLE rulesets ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_rulesets_versioning
+        ON rulesets(environment, product_name, category, subcategory, version)
+        """
+    )
 
 
 def seed_default_access(conn: sqlite3.Connection) -> None:
