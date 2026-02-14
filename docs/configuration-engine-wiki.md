@@ -19,8 +19,10 @@ A ruleset is JSON with:
 
 - `constraints`: boolean expressions that must evaluate truthy.
 - `calculations`: formulas evaluated sequentially to derive numeric outputs.
+- `default_values`: optional static/dynamic defaults applied to missing fields.
+- `custom_functions`: optional expression-defined functions usable inside formulas.
 
-Example (default fallback ruleset):
+Example:
 
 ```json
 {
@@ -38,34 +40,26 @@ Example (default fallback ruleset):
 }
 ```
 
+### Rule engine phases
+
+The runtime has clear phases to support extension:
+
+1. **Normalization** – ensure stable schema keys.
+2. **Compilation** – parse and validate expressions into reusable programs.
+3. **Evaluation** – apply defaults, constraints, then calculations.
+4. **Optimization** – score valid candidate configurations against objective.
+
+Because these concerns are separated, future work (rule package imports, simulation, static analysis, authoring assistance) can be added with less risk.
 
 ### Default input values (static and dynamic)
 
-Rulesets can optionally define `default_values` to fill missing configuration inputs before constraints and calculations run.
+Rulesets can define `default_values` to fill missing configuration inputs before constraints and calculations run.
 
 - `mode: "static"`: assigns a fixed `value`.
 - `mode: "dynamic"`: evaluates `rules` in order and uses the first matching rule. A rule can define:
   - `condition`: expression that must evaluate truthy (optional for final fallback)
   - `value`: fixed value
   - `formula`: computed value expression
-
-Example:
-
-```json
-{
-  "default_values": [
-    {"name": "discount", "mode": "static", "value": 0.05},
-    {
-      "name": "region",
-      "mode": "dynamic",
-      "rules": [
-        {"condition": "country == 'DE'", "value": "EU"},
-        {"value": "NA"}
-      ]
-    }
-  ]
-}
-```
 
 When a caller explicitly provides a field, that value is preserved and defaults are not applied for that field.
 
@@ -80,8 +74,6 @@ A deployment maps one environment (`dev`, `prod`, etc.) to one active ruleset. A
 5. Later, finalized payload is sent to `/api/submit` and stored in `specifications`.
 
 ## 3. Build a product in detail (walkthrough)
-
-This section is a practical path you can follow for a new product rollout.
 
 ### Step 0: Start services
 
@@ -115,12 +107,12 @@ Open `http://localhost:8001`, log in, and create a ruleset:
 
 - **Name**: semantic versioning style is recommended, e.g. `widget-pricing-v1.0.0`.
 - **Environment field**: authoring target (often `dev`).
-- **Payload**: JSON object with `constraints` and `calculations`.
+- **DSL or payload**: use DSL for readability, JSON for advanced cases.
 
 Recommended practice:
 
 - Keep constraint messages customer-friendly.
-- Keep formulas purely numeric and deterministic.
+- Keep formulas numeric and deterministic.
 - Add one rule change at a time so test failures are isolated.
 
 ### Step 3: Deploy the ruleset to an environment
@@ -147,11 +139,7 @@ Default seeded test user:
 - `api_key`: `demo-key`
 - allowed environments: `dev`, `prod`
 
-For new customers, insert a row in `customer_access` with a JSON array of allowed environments.
-
 ### Step 5: Evaluate a draft configuration
-
-Use the configurator API:
 
 ```bash
 curl -X POST http://localhost:8002/api/evaluate \
@@ -179,11 +167,7 @@ Expected response shape:
 }
 ```
 
-If `valid` is false, return violations to the UI and prevent final submit until corrected.
-
 ### Step 6: Submit finalized specification
-
-After a configuration is valid and accepted by the user/business flow:
 
 ```bash
 curl -X POST http://localhost:8002/api/submit \
@@ -205,15 +189,7 @@ curl -X POST http://localhost:8002/api/submit \
   }'
 ```
 
-Successful response:
-
-```json
-{"status":"submitted"}
-```
-
 ### Step 7: (Optional) Optimize a product automatically
-
-For guided selling or price optimization, call the Rules Engine `/optimize` endpoint with finite domains:
 
 ```bash
 curl -X POST http://localhost:8001/optimize \
@@ -231,8 +207,6 @@ curl -X POST http://localhost:8001/optimize \
   }'
 ```
 
-The engine brute-forces candidate combinations, filters invalid configurations, computes objective score, and returns the best valid candidate.
-
 ## 4. Rules expression language and safety
 
 Expressions are parsed with Python AST and validated against an allowlist.
@@ -245,12 +219,9 @@ Expressions are parsed with Python AST and validated against an allowlist.
 - Unary: `+x`, `-x`
 - Constants and variable names from context
 - Allowed functions: `abs`, `ceil`, `floor`, `max`, `min`, `round`, `sqrt`
+- Custom ruleset functions defined with `FUNCTION name(args...) = expression`
 
-### What this means for rule authors
-
-- No attribute access, imports, comprehensions, lambdas, or arbitrary function calls.
-- Keep formulas simple and explicit.
-- Treat missing fields as authoring errors and ensure required inputs are supplied by the caller.
+No attribute access, imports, comprehensions, lambdas, or arbitrary function calls are permitted.
 
 ## 5. Data model reference
 
@@ -263,27 +234,39 @@ Expressions are parsed with Python AST and validated against an allowlist.
 
 ## 6. Recommended product-delivery workflow
 
-1. Model business rules with a product manager + pricing + engineering.
+1. Model business rules with product + pricing + engineering.
 2. Author ruleset in `dev`.
-3. Create automated tests for edge constraints and calculations.
+3. Create automated tests for edge constraints, defaults, and calculations.
 4. Deploy to `dev` and run API-level checks.
 5. Validate configurator UX messages against `violations` output.
 6. Promote ruleset to `prod`.
 7. Monitor submitted specs and iterate with versioned rulesets.
 
-## 7. Quality checklist for next steps
+## 7. UI development and extensibility notes
 
-Use this as a review template before rollout:
+The Rules Engine HTML now includes named UI regions (`data-ui-region`) and card-based sections so future front-end work can be layered incrementally:
 
-- [ ] Ruleset has explicit constraint messages.
-- [ ] Calculations are ordered and reference-safe.
-- [ ] `dev` deployment tested with at least one valid and one invalid configuration.
-- [ ] Customer access rows exist for each pilot customer.
-- [ ] Submit payload includes required downstream fields.
-- [ ] Optimization objective matches business KPI (margin, total, score, etc.).
-- [ ] Rollback plan exists (re-deploy previous ruleset id).
+- Replace DSL textarea with a visual rule builder.
+- Add inline syntax/semantic validation hints.
+- Add per-ruleset test fixture runners.
+- Add side-by-side diffing between versions.
 
-## 8. Future expansion ideas
+This allows progressive enhancement without rewriting route contracts.
+
+## 8. Test strategy
+
+The repository now emphasizes logical coverage across engine and integration behavior.
+
+- **Engine tests** cover unsafe AST rejection, function handling, parser failure modes, dynamic defaults, optimization failure/success paths, and reusable compiled engines.
+- **App tests** cover auth boundaries, login/logout behavior, rule authoring errors, deployment/evaluation APIs, and persistence side effects.
+
+Run:
+
+```bash
+pytest
+```
+
+## 9. Future expansion ideas
 
 - Versioned approval flow for rules (draft → approved → deployed).
 - Change audit logs for author/deployer identity.

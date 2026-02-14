@@ -4,25 +4,40 @@
     <meta charset="utf-8" />
     <title>Rules Engine</title>
     <style>
-      body { font-family: Arial, sans-serif; margin: 2rem; }
-      .layout { display: grid; grid-template-columns: 1.15fr 1fr; gap: 1.5rem; align-items: start; }
-      .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; background: #fff; }
-      textarea { width: 100%; height: 240px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+      :root {
+        --surface: #ffffff;
+        --surface-muted: #f8fafc;
+        --border: #dbe3ee;
+        --accent-bg: #eef2ff;
+        --accent-text: #3730a3;
+        --text-muted: #4b5563;
+      }
+      body { font-family: Arial, sans-serif; margin: 2rem; background: var(--surface-muted); }
+      .topbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+      .layout { display: grid; grid-template-columns: 1.2fr 1fr; gap: 1.5rem; align-items: start; }
+      .card { border: 1px solid var(--border); border-radius: 8px; padding: 1rem; background: var(--surface); }
+      textarea { width: 100%; min-height: 240px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+      .field { display: flex; flex-direction: column; gap: 0.25rem; }
       .rule-item { padding: 0.6rem; border-bottom: 1px solid #eee; }
-      .meta { color: #4b5563; font-size: 0.9rem; }
-      .category-pill { background: #eef2ff; color: #3730a3; border-radius: 999px; padding: 0.15rem 0.5rem; font-size: 0.8rem; }
+      .meta { color: var(--text-muted); font-size: 0.9rem; }
+      .category-pill { background: var(--accent-bg); color: var(--accent-text); border-radius: 999px; padding: 0.15rem 0.5rem; font-size: 0.8rem; }
       .error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; padding: 0.75rem; border-radius: 6px; }
+      .hint-list { margin: 0.4rem 0 0; padding-left: 1.25rem; color: var(--text-muted); }
       code { background: #f3f4f6; padding: 0.15rem 0.25rem; border-radius: 4px; }
     </style>
   </head>
   <body>
-    <h1>Rules Engine Console</h1>
-    <p>Create, edit, categorize, and deploy product rulesets. Rules are human-readable and versioned per category.</p>
-    <form method="post" action="/logout"><button type="submit">Logout</button></form>
+    <div class="topbar">
+      <div>
+        <h1>Rules Engine Console</h1>
+        <p>Create, edit, categorize, and deploy product rulesets. This UI is structured with reusable cards so interactive editors can be added incrementally.</p>
+      </div>
+      <form method="post" action="/logout"><button type="submit">Logout</button></form>
+    </div>
 
-    <div class="layout">
-      <section class="card">
+    <div class="layout" data-ui-region="rules-engine-workspace">
+      <section class="card" data-ui-region="ruleset-editor">
         <h2>{% if selected_ruleset %}Edit ruleset #{{ selected_ruleset.id }}{% else %}Create ruleset{% endif %}</h2>
         {% if parse_error %}
         <p class="error">Unable to save rules: {{ parse_error }}</p>
@@ -32,12 +47,12 @@
           <input type="hidden" name="ruleset_id" value="{{ selected_ruleset.id }}" />
           {% endif %}
           <div class="grid">
-            <label>Name <input name="name" value="{{ selected_ruleset.name if selected_ruleset else 'Default Rules' }}" /></label>
-            <label>Environment <input name="environment" value="{{ selected_ruleset.environment if selected_ruleset else 'dev' }}" /></label>
-            <label>Product <input name="product_name" value="{{ selected_ruleset.product_name if selected_ruleset else 'laptop' }}" /></label>
-            <label>Version <input type="number" min="1" name="version" value="{{ selected_ruleset.version if selected_ruleset else 1 }}" /></label>
-            <label>Category <input name="category" value="{{ selected_ruleset.category if selected_ruleset else 'pricing' }}" /></label>
-            <label>Subcategory <input name="subcategory" value="{{ selected_ruleset.subcategory if selected_ruleset else 'discounts' }}" /></label>
+            <label class="field">Name <input name="name" value="{{ selected_ruleset.name if selected_ruleset else 'Default Rules' }}" /></label>
+            <label class="field">Environment <input name="environment" value="{{ selected_ruleset.environment if selected_ruleset else 'dev' }}" /></label>
+            <label class="field">Product <input name="product_name" value="{{ selected_ruleset.product_name if selected_ruleset else 'laptop' }}" /></label>
+            <label class="field">Version <input type="number" min="1" name="version" value="{{ selected_ruleset.version if selected_ruleset else 1 }}" /></label>
+            <label class="field">Category <input name="category" value="{{ selected_ruleset.category if selected_ruleset else 'pricing' }}" /></label>
+            <label class="field">Subcategory <input name="subcategory" value="{{ selected_ruleset.subcategory if selected_ruleset else 'discounts' }}" /></label>
           </div>
 
           <p>Rules DSL:</p>
@@ -48,12 +63,12 @@
             <textarea name="payload">{{ selected_ruleset.payload if selected_ruleset else '' }}</textarea>
           </details>
 
-          <p class="meta">Expressions support comparator and algebra symbols (<code>==</code>, <code>>=</code>, <code>+</code>, <code>*</code>, etc.) and basic functions (<code>min</code>, <code>max</code>, <code>round</code>, <code>sqrt</code>, ...). Custom function declarations are stored for future implementation.</p>
+          <p class="meta">Expressions support comparator and algebra symbols (<code>==</code>, <code>>=</code>, <code>+</code>, <code>*</code>, etc.) and built-in functions (<code>min</code>, <code>max</code>, <code>round</code>, <code>sqrt</code>, ...).</p>
           <button type="submit">{% if selected_ruleset %}Update{% else %}Save{% endif %}</button>
         </form>
       </section>
 
-      <section class="card">
+      <section class="card" data-ui-region="ruleset-browser">
         <h2>Existing rulesets</h2>
         {% for ruleset in rulesets %}
         <div class="rule-item">
@@ -76,7 +91,7 @@
       </section>
     </div>
 
-    <section class="card" style="margin-top: 1rem;">
+    <section class="card" style="margin-top: 1rem;" data-ui-region="deployment-status">
       <h2>Active deployments</h2>
       <ul>
         {% for deployment in deployments %}
@@ -84,6 +99,15 @@
         {% else %}
         <li>No deployments yet.</li>
         {% endfor %}
+      </ul>
+    </section>
+
+    <section class="card" style="margin-top: 1rem;" data-ui-region="frontend-extension-roadmap">
+      <h2>Frontend extension roadmap</h2>
+      <ul class="hint-list">
+        <li>Add a visual rule builder that maps to DSL and JSON in real time.</li>
+        <li>Attach rule impact previews with test fixtures per product family.</li>
+        <li>Enable inline validation badges for constraints and calculations.</li>
       </ul>
     </section>
   </body>

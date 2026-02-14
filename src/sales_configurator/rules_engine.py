@@ -56,6 +56,156 @@ class RulesParseError(ValueError):
     """Raised when pseudo-code rules cannot be parsed."""
 
 
+@dataclass(slots=True, frozen=True)
+class ExpressionProgram:
+    """Validated, compiled expression that can be reused safely."""
+
+    source: str
+    code: Any
+
+
+@dataclass(slots=True)
+class EvaluationResult:
+    valid: bool
+    calculations: dict[str, float]
+    violations: list[str]
+    resolved_configuration: dict[str, Any]
+
+
+@dataclass(slots=True)
+class _CalculationSpec:
+    name: str
+    program: ExpressionProgram
+
+
+@dataclass(slots=True)
+class _ConstraintSpec:
+    message: str
+    program: ExpressionProgram
+
+
+@dataclass(slots=True)
+class _DynamicRuleSpec:
+    condition: ExpressionProgram | None
+    formula: ExpressionProgram | None
+    value: Any = None
+
+
+@dataclass(slots=True)
+class _DefaultSpec:
+    name: str
+    mode: str
+    value: Any = None
+    rules: list[_DynamicRuleSpec] | None = None
+
+
+@dataclass(slots=True)
+class RuleEngine:
+    ruleset: dict[str, Any]
+    functions: dict[str, Callable[..., Any]]
+    defaults: list[_DefaultSpec]
+    constraints: list[_ConstraintSpec]
+    calculations: list[_CalculationSpec]
+
+    @classmethod
+    def from_ruleset(
+        cls,
+        ruleset: dict[str, Any],
+        extra_functions: dict[str, Callable[..., Any]] | None = None,
+    ) -> RuleEngine:
+        normalized = normalize_ruleset(ruleset)
+        functions = _resolve_eval_functions(extra_functions)
+        _attach_ruleset_custom_functions(normalized, functions)
+
+        defaults = [_compile_default_spec(entry, functions) for entry in normalized.get("default_values", [])]
+        constraints = [
+            _ConstraintSpec(
+                message=str(constraint["message"]),
+                program=compile_expression(str(constraint["expression"]), functions),
+            )
+            for constraint in normalized.get("constraints", [])
+        ]
+        calculations = [
+            _CalculationSpec(
+                name=str(calc["name"]),
+                program=compile_expression(str(calc["formula"]), functions),
+            )
+            for calc in normalized.get("calculations", [])
+        ]
+
+        return cls(
+            ruleset=normalized,
+            functions=functions,
+            defaults=defaults,
+            constraints=constraints,
+            calculations=calculations,
+        )
+
+    def evaluate(self, configuration: dict[str, Any]) -> EvaluationResult:
+        resolved_configuration = self.apply_default_values(configuration)
+
+        violations: list[str] = []
+        for constraint in self.constraints:
+            result = evaluate_program(constraint.program, resolved_configuration, self.functions)
+            if not bool(result):
+                violations.append(constraint.message)
+
+        calculations: dict[str, float] = {}
+        working_context = {**resolved_configuration}
+        for calc in self.calculations:
+            value = evaluate_program(calc.program, working_context, self.functions)
+            calculations[calc.name] = float(value)
+            working_context[calc.name] = value
+
+        return EvaluationResult(
+            valid=(len(violations) == 0),
+            calculations=calculations,
+            violations=violations,
+            resolved_configuration=resolved_configuration,
+        )
+
+    def apply_default_values(self, configuration: dict[str, Any]) -> dict[str, Any]:
+        resolved = {**configuration}
+        for default in self.defaults:
+            if default.name in resolved:
+                continue
+            resolved[default.name] = _resolve_compiled_default(default, resolved, self.functions)
+        return resolved
+
+    def optimize(self, domains: dict[str, list[Any]], objective: str, maximize: bool = False) -> dict[str, Any]:
+        keys = list(domains.keys())
+        objective_program = compile_expression(objective, self.functions)
+
+        best_score = float("-inf") if maximize else float("inf")
+        best_config: dict[str, Any] | None = None
+
+        for values in itertools.product(*(domains[key] for key in keys)):
+            candidate = dict(zip(keys, values, strict=True))
+            evaluated = self.evaluate(candidate)
+            if not evaluated.valid:
+                continue
+            score = float(
+                evaluate_program(
+                    objective_program,
+                    {**evaluated.resolved_configuration, **evaluated.calculations},
+                    self.functions,
+                )
+            )
+            is_better = score > best_score if maximize else score < best_score
+            if is_better:
+                best_score = score
+                best_config = {
+                    **evaluated.resolved_configuration,
+                    **evaluated.calculations,
+                    "objective_score": score,
+                }
+
+        if best_config is None:
+            raise ValueError("No valid configuration found for provided domains/rules")
+
+        return best_config
+
+
 def register_custom_function(name: str, function: Callable[..., Any]) -> None:
     CUSTOM_FUNCTIONS[name] = function
 
@@ -93,16 +243,35 @@ def _validate_ast(tree: ast.AST, allowed_function_names: set[str]) -> None:
                 raise UnsafeExpressionError("Unsupported function call")
 
 
+def compile_expression(
+    expression: str,
+    functions: dict[str, Callable[..., Any]] | None = None,
+    extra_functions: dict[str, Callable[..., Any]] | None = None,
+) -> ExpressionProgram:
+    resolved_functions = functions if functions is not None else _resolve_eval_functions(extra_functions)
+    tree = ast.parse(expression, mode="eval")
+    _validate_ast(tree, set(resolved_functions))
+    return ExpressionProgram(source=expression, code=compile(tree, "<rules>", "eval"))
+
+
+def evaluate_program(
+    program: ExpressionProgram,
+    context: dict[str, Any],
+    functions: dict[str, Callable[..., Any]] | None = None,
+    extra_functions: dict[str, Callable[..., Any]] | None = None,
+) -> Any:
+    resolved_functions = functions if functions is not None else _resolve_eval_functions(extra_functions)
+    return eval(program.code, {"__builtins__": {}, **resolved_functions}, context)
+
+
 def safe_eval(
     expression: str,
     context: dict[str, Any],
     extra_functions: dict[str, Callable[..., Any]] | None = None,
 ) -> Any:
     functions = _resolve_eval_functions(extra_functions)
-    tree = ast.parse(expression, mode="eval")
-    _validate_ast(tree, set(functions))
-    compiled = compile(tree, "<rules>", "eval")
-    return eval(compiled, {"__builtins__": {}, **functions}, context)
+    program = compile_expression(expression, functions=functions)
+    return evaluate_program(program, context, functions=functions)
 
 
 def _parse_literal_or_expression(raw_value: str) -> tuple[str, Any]:
@@ -231,70 +400,78 @@ def ruleset_to_pseudocode(ruleset: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-@dataclass(slots=True)
-class EvaluationResult:
-    valid: bool
-    calculations: dict[str, float]
-    violations: list[str]
-    resolved_configuration: dict[str, Any]
-
-
-def _resolve_default_value(default_entry: dict[str, Any], context: dict[str, Any]) -> Any:
+def _compile_default_spec(
+    default_entry: dict[str, Any],
+    functions: dict[str, Callable[..., Any]],
+) -> _DefaultSpec:
     mode = default_entry.get("mode", "static")
     if mode == "static":
         if "value" not in default_entry:
             raise ValueError("static defaults must define a value")
-        return default_entry["value"]
+        return _DefaultSpec(name=str(default_entry["name"]), mode=mode, value=default_entry["value"])
 
     if mode != "dynamic":
         raise ValueError(f"unsupported default mode: {mode}")
 
-    rules = default_entry.get("rules", [])
-    for rule in rules:
-        condition = rule.get("condition")
-        if condition is not None and not bool(safe_eval(condition, context)):
-            continue
+    rules: list[_DynamicRuleSpec] = []
+    for rule in default_entry.get("rules", []):
+        condition_program = None
+        formula_program = None
+        if "condition" in rule and rule["condition"] is not None:
+            condition_program = compile_expression(str(rule["condition"]), functions=functions)
         if "formula" in rule:
-            return safe_eval(rule["formula"], context)
-        if "value" in rule:
-            return rule["value"]
-        raise ValueError("dynamic default rule must define value or formula")
+            formula_program = compile_expression(str(rule["formula"]), functions=functions)
+        if formula_program is None and "value" not in rule:
+            raise ValueError("dynamic default rule must define value or formula")
+        rules.append(_DynamicRuleSpec(condition=condition_program, formula=formula_program, value=rule.get("value")))
 
-    raise ValueError(f"no dynamic default matched for field: {default_entry.get('name', '<unknown>')}")
+    return _DefaultSpec(name=str(default_entry["name"]), mode=mode, rules=rules)
+
+
+def _resolve_compiled_default(
+    default_spec: _DefaultSpec,
+    context: dict[str, Any],
+    functions: dict[str, Callable[..., Any]],
+) -> Any:
+    if default_spec.mode == "static":
+        return default_spec.value
+
+    for rule in default_spec.rules or []:
+        if rule.condition is not None and not bool(evaluate_program(rule.condition, context, functions)):
+            continue
+        if rule.formula is not None:
+            return evaluate_program(rule.formula, context, functions)
+        return rule.value
+
+    raise ValueError(f"no dynamic default matched for field: {default_spec.name}")
+
+
+def _attach_ruleset_custom_functions(
+    ruleset: dict[str, Any],
+    functions: dict[str, Callable[..., Any]],
+) -> None:
+    for custom in ruleset.get("custom_functions", []):
+        name = str(custom["name"])
+        args = [str(arg) for arg in custom.get("args", [])]
+        program = compile_expression(str(custom["expression"]), functions=functions)
+
+        def _custom_callable(*values: Any, _args: list[str] = args, _program: ExpressionProgram = program) -> Any:
+            if len(values) != len(_args):
+                raise ValueError(f"function expected {len(_args)} args, got {len(values)}")
+            context = dict(zip(_args, values, strict=True))
+            return evaluate_program(_program, context, functions)
+
+        functions[name] = _custom_callable
 
 
 def apply_default_values(ruleset: dict[str, Any], configuration: dict[str, Any]) -> dict[str, Any]:
-    resolved = {**configuration}
-    for default_entry in ruleset.get("default_values", []):
-        name = default_entry["name"]
-        if name in resolved:
-            continue
-        resolved[name] = _resolve_default_value(default_entry, resolved)
-    return resolved
+    engine = RuleEngine.from_ruleset(ruleset)
+    return engine.apply_default_values(configuration)
 
 
 def evaluate_rules(ruleset: dict[str, Any], configuration: dict[str, Any]) -> EvaluationResult:
-    normalized = normalize_ruleset(ruleset)
-    resolved_configuration = apply_default_values(normalized, configuration)
-    violations: list[str] = []
-    for constraint in normalized.get("constraints", []):
-        result = safe_eval(constraint["expression"], resolved_configuration)
-        if not bool(result):
-            violations.append(constraint["message"])
-
-    calculations: dict[str, float] = {}
-    working_context = {**resolved_configuration}
-    for calc in normalized.get("calculations", []):
-        value = safe_eval(calc["formula"], working_context)
-        calculations[calc["name"]] = float(value)
-        working_context[calc["name"]] = value
-
-    return EvaluationResult(
-        valid=(len(violations) == 0),
-        calculations=calculations,
-        violations=violations,
-        resolved_configuration=resolved_configuration,
-    )
+    engine = RuleEngine.from_ruleset(ruleset)
+    return engine.evaluate(configuration)
 
 
 def optimize_configuration(
@@ -303,22 +480,5 @@ def optimize_configuration(
     ruleset: dict[str, Any],
     maximize: bool = False,
 ) -> dict[str, Any]:
-    keys = list(domains.keys())
-    best_score = float("-inf") if maximize else float("inf")
-    best_config: dict[str, Any] | None = None
-
-    for values in itertools.product(*(domains[key] for key in keys)):
-        candidate = dict(zip(keys, values, strict=True))
-        evaluated = evaluate_rules(ruleset, candidate)
-        if not evaluated.valid:
-            continue
-        score = float(safe_eval(objective, {**candidate, **evaluated.calculations}))
-        is_better = score > best_score if maximize else score < best_score
-        if is_better:
-            best_score = score
-            best_config = {**candidate, **evaluated.calculations, "objective_score": score}
-
-    if best_config is None:
-        raise ValueError("No valid configuration found for provided domains/rules")
-
-    return best_config
+    engine = RuleEngine.from_ruleset(ruleset)
+    return engine.optimize(domains=domains, objective=objective, maximize=maximize)
