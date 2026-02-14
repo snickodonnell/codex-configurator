@@ -187,6 +187,31 @@ CREATE TABLE IF NOT EXISTS workspace_rules (
     FOREIGN KEY (category_id) REFERENCES workspace_categories(id),
     FOREIGN KEY (subcategory_id) REFERENCES workspace_categories(id)
 );
+
+CREATE TABLE IF NOT EXISTS customer_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id TEXT NOT NULL,
+    environment TEXT NOT NULL,
+    name TEXT NOT NULL,
+    project_status TEXT NOT NULL DEFAULT 'draft',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS customer_project_products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    workspace_product_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    configuration_status TEXT NOT NULL DEFAULT 'not_started',
+    configuration_state TEXT NOT NULL DEFAULT '{}',
+    last_evaluated_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES customer_projects(id),
+    FOREIGN KEY (workspace_product_id) REFERENCES workspace_products(id)
+);
 """
 
 
@@ -205,6 +230,7 @@ def init_db(db_path: str | Path) -> None:
         migrate_workspace_schema(conn)
         migrate_ui_schema(conn)
         migrate_workflow_schema(conn)
+        migrate_projects_schema(conn)
         seed_default_access(conn)
         seed_default_enhancements(conn)
         seed_workspace_defaults(conn)
@@ -302,6 +328,21 @@ def migrate_workflow_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_deployment_history_env
         ON deployment_history(environment, created_at)
+        """
+    )
+
+
+def migrate_projects_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_customer_projects_lookup
+        ON customer_projects(customer_id, environment, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_customer_project_products_lookup
+        ON customer_project_products(project_id, workspace_product_id)
         """
     )
 

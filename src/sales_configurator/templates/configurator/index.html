@@ -2,174 +2,252 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>ShopFloor Configurator</title>
+    <title>Customer Project Configurator</title>
     <style>
-      body{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}
-      pre{background:#f5f5f5;padding:1rem;overflow:auto}
-      .panel{border:1px solid #ddd;padding:1rem;margin:1rem 0;border-radius:6px}
-      .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}
-      .field{border:1px solid #e2e6f5;padding:.8rem;border-radius:8px}
-      .field.card{background:#f8faff}.field.accent{border-color:#7f8cff}.field.pill{border-radius:30px}
-      .opt-buttons button{margin-right:.35rem}
-      img.preview{max-width:100px;max-height:60px;display:block;margin:.3rem 0}
+      body { font-family: Arial, sans-serif; margin: 1.5rem; color: #192034; }
+      .layout { display: grid; grid-template-columns: 380px 1fr; gap: 1rem; align-items: start; }
+      .panel { border: 1px solid #dce2f2; border-radius: 10px; padding: 1rem; background: #fff; }
+      .muted { color: #5a6279; font-size: .9rem; }
+      .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+      .col { display: grid; gap: .6rem; }
+      .project { border: 1px solid #e4e8f5; border-radius: 8px; padding: .7rem; margin-bottom: .7rem; }
+      .project.selected { border-color: #7a8ef7; background: #f8f9ff; }
+      .pill { display: inline-block; border-radius: 20px; padding: .15rem .55rem; font-size: .8rem; background: #edf1ff; margin-left: .4rem; }
+      .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap:.7rem; }
+      .field { border: 1px solid #e4e8f5; border-radius: 8px; padding: .55rem; }
+      .rules { max-height: 260px; overflow: auto; }
+      pre { background: #0b1325; color: #d7deef; padding: .7rem; border-radius: 8px; overflow: auto; }
+      button { cursor: pointer; }
+      input, select, textarea { width: 100%; box-sizing: border-box; }
+      .danger { background: #ffe9ec; }
     </style>
   </head>
   <body>
-    <h1>ShopFloor Configurator</h1>
-    <p>Runtime configuration UI driven by Experience Studio mappings.</p>
+    <h1>Customer Project Configurator</h1>
+    <p class="muted">Create projects, attach products with quantities, and run configuration with rules/category enforcement and Studio display controls.</p>
     <form method="post" action="/logout"><button type="submit">Logout</button></form>
 
-    <div class="panel">
-      <label>Environment <input name="environment" id="environment" value="dev"></label>
-      <label>Customer ID <input name="customer_id" id="customer_id" value="demo-customer"></label>
-      <label>API Key <input name="api_key" id="api_key" value="demo-key"></label>
-      <button type="button" id="load-memo">Load Configuration Schema</button>
-      <p id="memo-version">No memo schema loaded.</p>
+    <div class="layout">
+      <div class="panel col">
+        <h2>Project Workspace</h2>
+        <label>Environment <input id="environment" value="dev" /></label>
+        <label>Customer ID <input id="customer-id" value="demo-customer" /></label>
+        <label>API Key <input id="api-key" value="demo-key" /></label>
+        <label>Project Name <input id="project-name" placeholder="Customer Pilot" /></label>
+        <label>Project Notes <textarea id="project-notes" rows="2"></textarea></label>
+        <button id="create-project" type="button">Create Project</button>
+        <div id="project-list"></div>
+      </div>
+
+      <div class="panel col">
+        <h2 id="selected-project-title">Configuration</h2>
+        <div class="row">
+          <label style="flex:1">Add Product
+            <select id="workspace-product"></select>
+          </label>
+          <label style="width:120px">Qty <input id="add-qty" type="number" min="1" value="1" /></label>
+          <button id="add-product" type="button">Add</button>
+        </div>
+
+        <div id="project-products" class="col"></div>
+
+        <div id="configuration-area" class="col" style="display:none;">
+          <h3 id="config-product-name"></h3>
+          <div id="status-strip" class="row"></div>
+          <div id="inputs" class="grid"></div>
+          <h4>Rule Category Enforcement</h4>
+          <div id="workspace-rules" class="rules"></div>
+          <button id="evaluate" type="button">Save + Evaluate Configuration</button>
+          <pre id="result">Choose a project product to configure.</pre>
+        </div>
+      </div>
     </div>
 
-    <form id="config-form" class="panel">
-      <h2>Inputs</h2>
-      <div id="inputs" class="grid"></div>
-      <button type="button" id="evaluate">Evaluate Memo</button>
-      <button type="button" id="submit">Submit Specification</button>
-    </form>
-
-    <h2>Result</h2>
-    <pre id="result">Load schema and evaluate to view outcomes.</pre>
-
     <script>
-      const inputs = document.getElementById('inputs');
-      const output = document.getElementById('result');
-      const memoVersion = document.getElementById('memo-version');
-      let uiSchema = null;
+      let workspaceProducts = [];
+      let projects = [];
+      let selectedProjectId = null;
+      let selectedProjectProductId = null;
+      let configPayload = null;
 
-      function defaultValueFor(name){return ({quantity:1, base_price:100, discount:0.1, region:'NA'})[name] ?? '';}
-
-      function createOptionImage(url){
-        if(!url) return null;
-        const img = document.createElement('img');
-        img.src = url;
-        img.className = 'preview';
-        return img;
+      async function jsonFetch(url, options={}) {
+        const res = await fetch(url, {headers:{'Content-Type':'application/json'}, ...options});
+        if (!res.ok) throw new Error(await res.text());
+        return await res.json();
       }
 
-      function appendControl(wrapper, control){
+      function selectedProject() { return projects.find((p) => p.id === selectedProjectId); }
+
+      function renderProjectList() {
+        const holder = document.getElementById('project-list');
+        holder.innerHTML = '';
+        projects.forEach((project) => {
+          const div = document.createElement('div');
+          div.className = `project ${project.id === selectedProjectId ? 'selected' : ''}`;
+          div.innerHTML = `
+            <strong>${project.name}</strong>
+            <span class="pill">Project Status: ${project.project_status}</span>
+            <div class="muted">${project.notes || ''}</div>
+            <div class="row">
+              <button data-action="open">Open</button>
+              <button data-action="save">Save Meta</button>
+              <button data-action="delete" class="danger">Delete</button>
+            </div>`;
+          const statusSelect = document.createElement('select');
+          ['draft','in_progress','configured','submitted'].forEach((v) => {
+            const o = document.createElement('option'); o.value=v; o.textContent=v; if(v===project.project_status) o.selected=true; statusSelect.appendChild(o);
+          });
+          div.appendChild(statusSelect);
+          div.querySelector('[data-action="open"]').onclick = () => { selectedProjectId = project.id; renderProjectList(); renderProjectProducts(); };
+          div.querySelector('[data-action="save"]').onclick = async () => {
+            await jsonFetch(`/api/projects/${project.id}`, {method:'PUT', body: JSON.stringify({name: project.name, notes: project.notes || '', project_status: statusSelect.value})});
+            await loadProjects();
+          };
+          div.querySelector('[data-action="delete"]').onclick = async () => {
+            await jsonFetch(`/api/projects/${project.id}`, {method:'DELETE'});
+            if (selectedProjectId === project.id) selectedProjectId = null;
+            await loadProjects();
+          };
+          holder.appendChild(div);
+        });
+      }
+
+      function renderProjectProducts() {
+        const project = selectedProject();
+        const holder = document.getElementById('project-products');
+        document.getElementById('selected-project-title').textContent = project ? `Configuration • ${project.name}` : 'Configuration';
+        holder.innerHTML = '';
+        if (!project) return;
+        project.products.forEach((item) => {
+          const row = document.createElement('div');
+          row.className = 'project';
+          row.innerHTML = `<strong>${item.product_name}</strong> <span class="pill">Configuration Status: ${item.configuration_status}</span>`;
+
+          const qty = document.createElement('input'); qty.type = 'number'; qty.min = '1'; qty.value = item.quantity;
+          const status = document.createElement('select');
+          ['not_started','in_progress','ready','attention_required'].forEach((v)=>{const o=document.createElement('option');o.value=v;o.textContent=v;if(v===item.configuration_status)o.selected=true;status.appendChild(o);});
+          const actions = document.createElement('div'); actions.className = 'row';
+          const open = document.createElement('button'); open.textContent = 'Configure';
+          const save = document.createElement('button'); save.textContent = 'Save';
+          const remove = document.createElement('button'); remove.textContent = 'Remove'; remove.className = 'danger';
+          actions.append(qty,status,open,save,remove);
+          row.appendChild(actions);
+
+          open.onclick = async () => { selectedProjectProductId = item.id; await loadConfiguration(); };
+          save.onclick = async () => {
+            await jsonFetch(`/api/projects/${project.id}/products/${item.id}`, {method:'PUT', body: JSON.stringify({quantity: Number(qty.value), configuration_status: status.value})});
+            await loadProjects();
+          };
+          remove.onclick = async () => {
+            await jsonFetch(`/api/projects/${project.id}/products/${item.id}`, {method:'DELETE'});
+            if (selectedProjectProductId === item.id) { selectedProjectProductId = null; document.getElementById('configuration-area').style.display='none'; }
+            await loadProjects();
+          };
+          holder.appendChild(row);
+        });
+      }
+
+      function createInput(control, value) {
+        const wrap = document.createElement('div'); wrap.className = 'field';
+        wrap.innerHTML = `<strong>${control.display_label}</strong><div class="muted">${control.help_text || ''}</div>`;
         const id = `param-${control.parameter_name}`;
-        if(control.control_type === 'radio_boolean'){
-          wrapper.innerHTML += `<label><input type="radio" name="${id}" data-parameter-name="${control.parameter_name}" value="true"> Yes</label><label><input type="radio" name="${id}" data-parameter-name="${control.parameter_name}" value="false"> No</label>`;
-          return;
+        let input;
+        if (control.control_type === 'dropdown') {
+          input = document.createElement('select');
+          control.options.forEach((opt)=>{const o=document.createElement('option'); o.value=opt.option_value; o.textContent=opt.option_label; input.appendChild(o);});
+        } else {
+          input = document.createElement('input');
+          input.type = control.control_type === 'number' ? 'number' : 'text';
+          if (control.min_value !== null) input.min = control.min_value;
+          if (control.max_value !== null) input.max = control.max_value;
+          if (control.step_value !== null) input.step = control.step_value;
+          input.placeholder = control.placeholder || '';
         }
-        if(control.control_type === 'slider'){
-          wrapper.innerHTML += `<input type="range" id="${id}" data-parameter-name="${control.parameter_name}" min="${control.min_value ?? 0}" max="${control.max_value ?? 100}" step="${control.step_value ?? 1}" value="${defaultValueFor(control.parameter_name)}"> <span id="${id}-value"></span>`;
-          setTimeout(()=>{
-            const slider = document.getElementById(id);
-            const value = document.getElementById(`${id}-value`);
-            value.textContent = slider.value;
-            slider.oninput = ()=> value.textContent = slider.value;
-          }, 0);
-          return;
-        }
-        if(control.control_type === 'dropdown'){
-          const select = document.createElement('select');
-          select.id = id;
-          select.dataset.parameterName = control.parameter_name;
-          control.options.forEach((opt)=>{
-            const option = document.createElement('option');
-            option.value = opt.option_value;
-            option.textContent = opt.option_label;
-            select.appendChild(option);
-          });
-          wrapper.appendChild(select);
-          return;
-        }
-        if(control.control_type === 'button_group'){
-          const holder = document.createElement('div');
-          holder.className = 'opt-buttons';
-          control.options.forEach((opt)=>{
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.textContent = opt.option_label;
-            button.dataset.value = opt.option_value;
-            button.dataset.parameterName = control.parameter_name;
-            button.onclick = ()=>{
-              holder.querySelectorAll('button').forEach((btn)=> btn.style.background='');
-              button.style.background = '#c8cffc';
-              holder.dataset.selectedValue = opt.option_value;
-            };
-            holder.appendChild(button);
-            const img = createOptionImage(opt.image_url);
-            if(img) holder.appendChild(img);
-          });
-          wrapper.appendChild(holder);
-          return;
-        }
-        const type = control.control_type === 'number' ? 'number' : 'text';
-        wrapper.innerHTML += `<input id="${id}" data-parameter-name="${control.parameter_name}" type="${type}" placeholder="${control.placeholder || ''}" value="${defaultValueFor(control.parameter_name)}">`;
+        input.id = id; input.dataset.parameterName = control.parameter_name;
+        if (value !== undefined && value !== null) input.value = value;
+        wrap.appendChild(input);
+        return wrap;
       }
 
-      function renderSchema(body){
-        uiSchema = body;
-        inputs.innerHTML = '';
-        body.controls.forEach((control)=>{
-          const wrapper = document.createElement('div');
-          wrapper.className = `field ${control.display_style || ''}`;
-          wrapper.innerHTML = `<strong>${control.display_label}</strong><div>${control.help_text || ''}</div>`;
-          const img = createOptionImage(control.image_url);
-          if(img) wrapper.appendChild(img);
-          appendControl(wrapper, control);
-          inputs.appendChild(wrapper);
+      async function loadConfiguration() {
+        const project = selectedProject();
+        if (!project || !selectedProjectProductId) return;
+        configPayload = await jsonFetch(`/api/projects/${project.id}/configuration?item_id=${selectedProjectProductId}`);
+        document.getElementById('configuration-area').style.display = 'grid';
+        document.getElementById('config-product-name').textContent = `${configPayload.product_name} Configuration`;
+        document.getElementById('status-strip').innerHTML = `<span class="pill">Project: ${configPayload.project.project_status}</span><span class="pill">Configuration: ${project.products.find((x)=>x.id===selectedProjectProductId)?.configuration_status || 'not_started'}</span><span class="pill">Ruleset ${configPayload.schema.category} / ${configPayload.schema.subcategory}</span>`;
+
+        const inputs = document.getElementById('inputs'); inputs.innerHTML = '';
+        configPayload.controls.forEach((control) => inputs.appendChild(createInput(control, configPayload.configuration_state[control.parameter_name])));
+
+        const rules = document.getElementById('workspace-rules');
+        rules.innerHTML = configPayload.workspace_rules.map((rule) => `<div class="field"><strong>${rule.category_name}${rule.subcategory_name ? ` → ${rule.subcategory_name}` : ''}</strong><div>${rule.expression}</div><div class="muted">${rule.message || ''}</div></div>`).join('') || '<div class="muted">No workspace rules configured for this product.</div>';
+      }
+
+      function configurationPayload() {
+        const cfg = {};
+        document.querySelectorAll('[data-parameter-name]').forEach((input) => {
+          if (input.value === '') return;
+          cfg[input.dataset.parameterName] = input.type === 'number' ? Number(input.value) : input.value;
         });
-        const schema = body.schema;
-        memoVersion.textContent = `Memo bound to ${schema.product_name}/${schema.category}/${schema.subcategory} v${schema.version}`;
+        return cfg;
       }
 
-      async function loadSchema(){
-        const environment = document.getElementById('environment').value;
-        const response = await fetch(`/api/ui-schema?environment=${encodeURIComponent(environment)}`);
-        renderSchema(await response.json());
-      }
-
-      function readValue(input){
-        if(input.type === 'number' || input.type === 'range') return Number(input.value);
-        return input.value;
-      }
-
-      function payload(){
-        const config = {};
-        document.querySelectorAll('[data-parameter-name]').forEach((input)=>{
-          const name = input.dataset.parameterName;
-          if(input.type === 'radio') {
-            if(input.checked) config[name] = input.value === 'true';
-            return;
-          }
-          if(input.tagName === 'BUTTON') return;
-          if(input.value === '') return;
-          config[name] = readValue(input);
-        });
-        document.querySelectorAll('.opt-buttons').forEach((holder)=>{
-          const btn = holder.querySelector('button[data-parameter-name]');
-          if(btn && holder.dataset.selectedValue) config[btn.dataset.parameterName] = holder.dataset.selectedValue;
-        });
-        return {
-          customer_id: document.getElementById('customer_id').value,
-          api_key: document.getElementById('api_key').value,
-          environment: document.getElementById('environment').value,
-          configuration: config
+      async function evaluateConfiguration() {
+        const project = selectedProject();
+        const body = {
+          customer_id: document.getElementById('customer-id').value,
+          api_key: document.getElementById('api-key').value,
+          configuration: configurationPayload(),
         };
+        const out = await jsonFetch(`/api/projects/${project.id}/products/${selectedProjectProductId}/evaluate`, {method:'POST', body: JSON.stringify(body)});
+        document.getElementById('result').textContent = JSON.stringify(out, null, 2);
+        await loadProjects();
       }
 
-      document.getElementById('load-memo').onclick = loadSchema;
-      document.getElementById('evaluate').onclick = async ()=>{
-        const res = await fetch('/api/evaluate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload())});
-        output.textContent = JSON.stringify(await res.json(), null, 2);
-      };
-      document.getElementById('submit').onclick = async ()=>{
-        const base = payload();
-        const res = await fetch('/api/submit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({customer_id:base.customer_id, api_key:base.api_key, environment:base.environment, specification:base.configuration})});
-        output.textContent = JSON.stringify(await res.json(), null, 2);
+      async function loadWorkspaceProducts() {
+        const data = await jsonFetch('/api/workspace-products');
+        workspaceProducts = data.products;
+        const select = document.getElementById('workspace-product');
+        select.innerHTML = '';
+        workspaceProducts.forEach((p)=>{const o=document.createElement('option'); o.value=p.id; o.textContent=p.name; select.appendChild(o);});
+      }
+
+      async function loadProjects() {
+        const customerId = document.getElementById('customer-id').value;
+        const env = document.getElementById('environment').value;
+        const data = await jsonFetch(`/api/projects?customer_id=${encodeURIComponent(customerId)}&environment=${encodeURIComponent(env)}`);
+        projects = data.projects;
+        if (!projects.some((p)=>p.id===selectedProjectId)) selectedProjectId = projects[0]?.id || null;
+        renderProjectList();
+        renderProjectProducts();
+      }
+
+      document.getElementById('create-project').onclick = async () => {
+        await jsonFetch('/api/projects', {method:'POST', body: JSON.stringify({
+          customer_id: document.getElementById('customer-id').value,
+          environment: document.getElementById('environment').value,
+          name: document.getElementById('project-name').value || 'New Project',
+          notes: document.getElementById('project-notes').value,
+          project_status: 'draft',
+        })});
+        document.getElementById('project-name').value = '';
+        document.getElementById('project-notes').value = '';
+        await loadProjects();
       };
 
-      loadSchema();
+      document.getElementById('add-product').onclick = async () => {
+        const project = selectedProject();
+        if (!project) return;
+        await jsonFetch(`/api/projects/${project.id}/products`, {method:'POST', body: JSON.stringify({workspace_product_id: Number(document.getElementById('workspace-product').value), quantity: Number(document.getElementById('add-qty').value)})});
+        await loadProjects();
+      };
+
+      document.getElementById('evaluate').onclick = evaluateConfiguration;
+      document.getElementById('customer-id').onchange = loadProjects;
+      document.getElementById('environment').onchange = loadProjects;
+
+      (async function boot(){ await loadWorkspaceProducts(); await loadProjects(); })();
     </script>
   </body>
 </html>
