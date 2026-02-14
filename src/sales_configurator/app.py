@@ -11,6 +11,7 @@ from .db import connect, init_db, json_dumps
 from .rules_engine import (
     RulesParseError,
     evaluate_rules,
+    infer_memo_parameters,
     normalize_ruleset,
     optimize_configuration,
     parse_ruleset_pseudocode,
@@ -19,6 +20,50 @@ from .rules_engine import (
 
 
 DEFAULT_RULESET = {
+    "memo_parameters": [
+        {
+            "name": "quantity",
+            "label": "Quantity",
+            "data_type": "number",
+            "parameter_class": "required_input",
+            "rules_engine_property": "quantity",
+        },
+        {
+            "name": "base_price",
+            "label": "Base Price",
+            "data_type": "number",
+            "parameter_class": "required_input",
+            "rules_engine_property": "base_price",
+        },
+        {
+            "name": "discount",
+            "label": "Discount",
+            "data_type": "number",
+            "parameter_class": "optional_input",
+            "rules_engine_property": "discount",
+        },
+        {
+            "name": "region",
+            "label": "Region",
+            "data_type": "string",
+            "parameter_class": "required_input",
+            "rules_engine_property": "region",
+        },
+        {
+            "name": "unit_price",
+            "label": "Unit Price",
+            "data_type": "number",
+            "parameter_class": "intermediate",
+            "rules_engine_property": "unit_price",
+        },
+        {
+            "name": "total_price",
+            "label": "Total Price",
+            "data_type": "number",
+            "parameter_class": "intermediate",
+            "rules_engine_property": "total_price",
+        },
+    ],
     "constraints": [
         {"expression": "quantity >= 1", "message": "Quantity must be at least 1."},
         {
@@ -40,17 +85,58 @@ def _db_path(app: Flask) -> Path:
     return Path(app.config["DATABASE_PATH"])
 
 
-def _load_deployed_rules(conn: Any, environment: str) -> dict[str, Any]:
+def _load_deployed_ruleset(conn: Any, environment: str) -> dict[str, Any]:
     row = conn.execute(
         """
-        SELECT r.payload
+        SELECT
+            r.id AS ruleset_id,
+            r.product_name,
+            r.category,
+            r.subcategory,
+            r.version,
+            r.payload
         FROM deployments d
         JOIN rulesets r ON d.ruleset_id = r.id
         WHERE d.environment = ?
         """,
         (environment,),
     ).fetchone()
-    return normalize_ruleset(json.loads(row["payload"]) if row else DEFAULT_RULESET)
+
+    if row is None:
+        return {
+            "ruleset_id": None,
+            "product_name": "default-product",
+            "category": "general",
+            "subcategory": "default",
+            "version": 1,
+            "rules": normalize_ruleset(DEFAULT_RULESET),
+        }
+
+    return {
+        "ruleset_id": row["ruleset_id"],
+        "product_name": row["product_name"],
+        "category": row["category"],
+        "subcategory": row["subcategory"],
+        "version": row["version"],
+        "rules": normalize_ruleset(json.loads(row["payload"])),
+    }
+
+
+def _build_configuration_memo_schema(ruleset: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+    params = infer_memo_parameters(ruleset)
+    grouped = {
+        "required_input": [item for item in params if item["parameter_class"] == "required_input"],
+        "optional_input": [item for item in params if item["parameter_class"] == "optional_input"],
+        "intermediate": [item for item in params if item["parameter_class"] == "intermediate"],
+    }
+    return {
+        "product_name": metadata["product_name"],
+        "category": metadata["category"],
+        "subcategory": metadata["subcategory"],
+        "version": metadata["version"],
+        "parameters": params,
+        **grouped,
+    }
 
 
 def _authorize(conn: Any, customer_id: str, api_key: str, environment: str) -> bool:
@@ -263,7 +349,7 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
     def optimize() -> Any:
         request_data = request.get_json(force=True)
         conn = connect(_db_path(app))
-        ruleset = _load_deployed_rules(conn, request_data["environment"])
+        ruleset = _load_deployed_ruleset(conn, request_data["environment"])["rules"]
         result = optimize_configuration(
             domains=request_data["domains"],
             objective=request_data["objective"],
@@ -285,6 +371,14 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
     def index() -> str:
         return render_template("configurator/index.html")
 
+    @app.get("/api/configuration-memo")
+    def configuration_memo() -> Any:
+        environment = request.args.get("environment", "dev")
+        conn = connect(_db_path(app))
+        deployed = _load_deployed_ruleset(conn, environment)
+        schema = _build_configuration_memo_schema(deployed["rules"], deployed)
+        return jsonify(schema)
+
     @app.post("/api/evaluate")
     def evaluate() -> Any:
         payload = request.get_json(force=True)
@@ -297,21 +391,58 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
             abort(403)
 
         configuration = payload["configuration"]
-        ruleset = _load_deployed_rules(conn, environment)
+        deployed = _load_deployed_ruleset(conn, environment)
+        ruleset = deployed["rules"]
         evaluated = evaluate_rules(ruleset, configuration)
+        memo_schema = _build_configuration_memo_schema(ruleset, deployed)
+
         response = {
             "valid": evaluated.valid,
             "calculations": evaluated.calculations,
             "violations": evaluated.violations,
             "resolved_configuration": evaluated.resolved_configuration,
+            "configuration_memo": {
+                "schema": memo_schema,
+                "inputs": configuration,
+                "resolved": evaluated.resolved_configuration,
+                "intermediate": evaluated.calculations,
+            },
         }
 
         with conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO configuration_memos(
+                    customer_id,
+                    environment,
+                    ruleset_id,
+                    product_name,
+                    category,
+                    subcategory,
+                    version,
+                    status,
+                    memo
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    customer_id,
+                    environment,
+                    deployed["ruleset_id"],
+                    deployed["product_name"],
+                    deployed["category"],
+                    deployed["subcategory"],
+                    deployed["version"],
+                    "draft",
+                    json_dumps(response["configuration_memo"]),
+                ),
+            )
+            memo_id = cursor.lastrowid
             conn.execute(
                 "INSERT INTO configuration_states(customer_id, environment, state) VALUES (?, ?, ?)",
                 (customer_id, environment, json_dumps(evaluated.resolved_configuration)),
             )
 
+        response["configuration_memo"]["id"] = memo_id
         return jsonify(response)
 
     @app.post("/api/submit")
@@ -325,11 +456,38 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
         if not _authorize(conn, customer_id, api_key, environment):
             abort(403)
 
-        specification = payload["specification"]
+        deployed = _load_deployed_ruleset(conn, environment)
+        specification = payload.get("specification", {})
         with conn:
             conn.execute(
                 "INSERT INTO specifications(customer_id, environment, specification) VALUES (?, ?, ?)",
                 (customer_id, environment, json_dumps(specification)),
+            )
+            conn.execute(
+                """
+                INSERT INTO configuration_memos(
+                    customer_id,
+                    environment,
+                    ruleset_id,
+                    product_name,
+                    category,
+                    subcategory,
+                    version,
+                    status,
+                    memo
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    customer_id,
+                    environment,
+                    deployed["ruleset_id"],
+                    deployed["product_name"],
+                    deployed["category"],
+                    deployed["subcategory"],
+                    deployed["version"],
+                    "submitted",
+                    json_dumps({"specification": specification}),
+                ),
             )
         return jsonify({"status": "submitted"})
 

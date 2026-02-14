@@ -34,6 +34,22 @@ CREATE TABLE IF NOT EXISTS configuration_states (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS configuration_memos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id TEXT NOT NULL,
+    environment TEXT NOT NULL,
+    ruleset_id INTEGER,
+    product_name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    subcategory TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    memo TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (ruleset_id) REFERENCES rulesets(id)
+);
+
 CREATE TABLE IF NOT EXISTS specifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     customer_id TEXT NOT NULL,
@@ -69,6 +85,7 @@ def init_db(db_path: str | Path) -> None:
     with conn:
         conn.executescript(SCHEMA)
         migrate_rulesets_schema(conn)
+        migrate_configuration_memo_schema(conn)
         seed_default_access(conn)
         seed_default_enhancements(conn)
 
@@ -100,6 +117,15 @@ def seed_default_access(conn: sqlite3.Connection) -> None:
             "INSERT INTO customer_access(customer_id, api_key, environments) VALUES (?, ?, ?)",
             ("demo-customer", "demo-key", json.dumps(["dev", "prod"])),
         )
+
+
+def migrate_configuration_memo_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_configuration_memos_lookup
+        ON configuration_memos(customer_id, environment, product_name, category, subcategory, version)
+        """
+    )
 
 
 def seed_default_enhancements(conn: sqlite3.Connection) -> None:
