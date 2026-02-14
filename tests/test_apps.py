@@ -152,3 +152,30 @@ def test_evaluate_and_submit(tmp_path) -> None:
     )
     assert submit.status_code == 200
     assert submit.get_json()["status"] == "submitted"
+
+
+def test_ruleset_create_from_pseudocode(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    app = create_rules_engine_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    response = client.post(
+        "/rulesets",
+        data={
+            "name": "dsl-rules",
+            "environment": "dev",
+            "product_name": "desktop",
+            "category": "availability",
+            "subcategory": "stock",
+            "version": "1",
+            "pseudo_rules": "DEFAULT discount = 0.05\nCONSTRAINT quantity >= 1 :: Quantity required\nCALC total = base_price * quantity * (1-discount)",
+        },
+    )
+    assert response.status_code == 302
+
+    page = client.get("/")
+    assert page.status_code == 200
+    html = page.get_data(as_text=True)
+    assert "dsl-rules" in html
+    assert "availability" in html

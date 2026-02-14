@@ -1,4 +1,11 @@
-from sales_configurator.rules_engine import evaluate_rules, normalize_ruleset, optimize_configuration, safe_eval
+from sales_configurator.rules_engine import (
+    evaluate_rules,
+    normalize_ruleset,
+    optimize_configuration,
+    parse_ruleset_pseudocode,
+    ruleset_to_pseudocode,
+    safe_eval,
+)
 
 
 def test_safe_eval_blocks_unsafe_calls() -> None:
@@ -85,3 +92,31 @@ def test_normalize_ruleset_for_compatibility() -> None:
     assert normalized["calculations"] == []
     assert normalized["default_values"] == []
     assert normalized["custom"] is True
+
+
+def test_parse_ruleset_pseudocode() -> None:
+    parsed = parse_ruleset_pseudocode(
+        """
+        DEFAULT discount = 0.05
+        DEFAULT region WHEN country == 'DE' = 'EU'
+        CONSTRAINT quantity >= 1 :: Quantity must be at least 1
+        CALC total = base_price * quantity * (1-discount)
+        FUNCTION margin(price,cost) = price-cost
+        """
+    )
+    assert parsed["default_values"][0]["name"] == "discount"
+    assert parsed["default_values"][1]["rules"][0]["condition"] == "country == 'DE'"
+    assert parsed["constraints"][0]["message"] == "Quantity must be at least 1"
+    assert parsed["calculations"][0]["name"] == "total"
+    assert parsed["custom_functions"][0]["name"] == "margin"
+
+
+def test_ruleset_to_pseudocode_round_trip() -> None:
+    ruleset = {
+        "default_values": [{"name": "discount", "mode": "static", "value": 0.1}],
+        "constraints": [{"expression": "quantity >= 1", "message": "bad qty"}],
+        "calculations": [{"name": "total", "formula": "base_price * quantity"}],
+    }
+    pseudo = ruleset_to_pseudocode(ruleset)
+    assert "DEFAULT discount = 0.1" in pseudo
+    assert "CONSTRAINT quantity >= 1 :: bad qty" in pseudo

@@ -8,7 +8,14 @@ from typing import Any
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 
 from .db import connect, init_db, json_dumps
-from .rules_engine import evaluate_rules, normalize_ruleset, optimize_configuration
+from .rules_engine import (
+    RulesParseError,
+    evaluate_rules,
+    normalize_ruleset,
+    optimize_configuration,
+    parse_ruleset_pseudocode,
+    ruleset_to_pseudocode,
+)
 
 
 DEFAULT_RULESET = {
@@ -162,16 +169,23 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
             """
         ).fetchall()
         deployments = conn.execute("SELECT environment, ruleset_id, deployed_at FROM deployments").fetchall()
+        selected_pseudocode = ""
+        if selected_ruleset:
+            selected_pseudocode = ruleset_to_pseudocode(json.loads(selected_ruleset["payload"]))
+
         return render_template(
             "rules_engine/index.html",
             rulesets=rulesets,
             deployments=deployments,
             selected_ruleset=selected_ruleset,
+            selected_pseudocode=selected_pseudocode,
+            parse_error=request.args.get("error", ""),
         )
 
     @app.post("/rulesets")
     def create_ruleset() -> Any:
-        payload = request.form.get("payload", "")
+        payload = request.form.get("payload", "").strip()
+        pseudo_rules = request.form.get("pseudo_rules", "").strip()
         name = request.form.get("name", "Untitled Ruleset")
         environment = request.form.get("environment", "dev")
         product_name = request.form.get("product_name", "default-product").strip() or "default-product"
@@ -179,7 +193,18 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
         subcategory = request.form.get("subcategory", "default").strip() or "default"
         version = int(request.form.get("version", "1"))
         ruleset_id = request.form.get("ruleset_id", "").strip()
-        parsed = normalize_ruleset(json.loads(payload))
+
+        try:
+            if pseudo_rules:
+                parsed = parse_ruleset_pseudocode(pseudo_rules)
+            elif payload:
+                parsed = normalize_ruleset(json.loads(payload))
+            else:
+                raise RulesParseError("Provide pseudo rules or JSON payload")
+        except (json.JSONDecodeError, RulesParseError, ValueError) as exc:
+            target = int(ruleset_id) if ruleset_id else ""
+            return redirect(url_for("index", edit=target, error=str(exc)))
+
         conn = connect(_db_path(app))
         with conn:
             if ruleset_id:
@@ -196,7 +221,7 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
                         category,
                         subcategory,
                         version,
-                        json_dumps(parsed),
+                        json_dumps(normalize_ruleset(parsed)),
                         int(ruleset_id),
                     ),
                 )
@@ -206,7 +231,15 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
                     INSERT INTO rulesets(name, environment, product_name, category, subcategory, version, payload)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (name, environment, product_name, category, subcategory, version, json_dumps(parsed)),
+                    (
+                        name,
+                        environment,
+                        product_name,
+                        category,
+                        subcategory,
+                        version,
+                        json_dumps(normalize_ruleset(parsed)),
+                    ),
                 )
         return redirect(url_for("index"))
 

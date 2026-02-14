@@ -7,21 +7,26 @@
       body { font-family: Arial, sans-serif; margin: 2rem; }
       .layout { display: grid; grid-template-columns: 1.15fr 1fr; gap: 1.5rem; align-items: start; }
       .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; background: #fff; }
-      textarea { width: 100%; height: 260px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      textarea { width: 100%; height: 240px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
       .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
       .rule-item { padding: 0.6rem; border-bottom: 1px solid #eee; }
       .meta { color: #4b5563; font-size: 0.9rem; }
       .category-pill { background: #eef2ff; color: #3730a3; border-radius: 999px; padding: 0.15rem 0.5rem; font-size: 0.8rem; }
+      .error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; padding: 0.75rem; border-radius: 6px; }
+      code { background: #f3f4f6; padding: 0.15rem 0.25rem; border-radius: 4px; }
     </style>
   </head>
   <body>
     <h1>Rules Engine Console</h1>
-    <p>Create, edit, categorize, and deploy product rulesets. Rules are versioned and compatible in-category.</p>
+    <p>Create, edit, categorize, and deploy product rulesets. Rules are human-readable and versioned per category.</p>
     <form method="post" action="/logout"><button type="submit">Logout</button></form>
 
     <div class="layout">
       <section class="card">
         <h2>{% if selected_ruleset %}Edit ruleset #{{ selected_ruleset.id }}{% else %}Create ruleset{% endif %}</h2>
+        {% if parse_error %}
+        <p class="error">Unable to save rules: {{ parse_error }}</p>
+        {% endif %}
         <form method="post" action="/rulesets">
           {% if selected_ruleset %}
           <input type="hidden" name="ruleset_id" value="{{ selected_ruleset.id }}" />
@@ -34,9 +39,16 @@
             <label>Category <input name="category" value="{{ selected_ruleset.category if selected_ruleset else 'pricing' }}" /></label>
             <label>Subcategory <input name="subcategory" value="{{ selected_ruleset.subcategory if selected_ruleset else 'discounts' }}" /></label>
           </div>
-          <p>Payload JSON:</p>
-          <textarea name="payload">{{ selected_ruleset.payload if selected_ruleset else '{"schema_version":1,"default_values":[{"name":"discount","mode":"static","value":0.05}],"constraints":[{"expression":"quantity >= 1","message":"Quantity must be at least 1."}],"calculations":[{"name":"total_price","formula":"base_price * quantity * (1-discount)"}]}' }}</textarea>
-          <p class="meta">Tip: adding new fields is safe. Unknown fields are ignored by older readers for forward/backward compatibility in each category.</p>
+
+          <p>Rules DSL:</p>
+          <textarea name="pseudo_rules">{{ selected_pseudocode if selected_pseudocode else "# Supported lines:\n# DEFAULT field = value\n# DEFAULT field WHEN condition = formula_or_value\n# CONSTRAINT expression :: message\n# CALC result_field = formula\n# FUNCTION margin(price,cost) = price - cost\n\nDEFAULT discount = 0.05\nCONSTRAINT quantity >= 1 :: Quantity must be at least 1\nCALC total_price = base_price * quantity * (1 - discount)" }}</textarea>
+
+          <details>
+            <summary>Advanced: edit raw JSON payload</summary>
+            <textarea name="payload">{{ selected_ruleset.payload if selected_ruleset else '' }}</textarea>
+          </details>
+
+          <p class="meta">Expressions support comparator and algebra symbols (<code>==</code>, <code>>=</code>, <code>+</code>, <code>*</code>, etc.) and basic functions (<code>min</code>, <code>max</code>, <code>round</code>, <code>sqrt</code>, ...). Custom function declarations are stored for future implementation.</p>
           <button type="submit">{% if selected_ruleset %}Update{% else %}Save{% endif %}</button>
         </form>
       </section>
