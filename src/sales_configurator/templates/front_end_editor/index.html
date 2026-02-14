@@ -2,21 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Experience Studio</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
     <style>
-      body{font-family:Arial,sans-serif;margin:1.5rem;background:#f5f7ff}
-      .wrap{max-width:1200px;margin:0 auto}
-      .card{background:#fff;border:1px solid #d9def0;border-radius:10px;padding:1rem;margin-bottom:1rem}
-      .row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.7rem}
+      .page { max-width: 1200px; }
       label{font-size:.92rem;display:flex;flex-direction:column;gap:.25rem}
-      input,select,textarea{padding:.45rem;border:1px solid #ccd4ea;border-radius:8px}
-      textarea{min-height:72px}
-      button{padding:.45rem .8rem;border:1px solid #5564d8;border-radius:8px;background:#5564d8;color:#fff}
-      table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:.45rem;text-align:left}
+      #status{min-height:1.2rem;}
     </style>
   </head>
   <body>
-    <div class="wrap">
+    <div class="page stack">
       <h1>Experience Studio</h1>
       <p>Flexibly map rules parameters into customer-facing controls without changing evaluation logic. Workflow: RuleCanvas → Experience Studio → Approval → Deployment.</p>
       <p><a href="http://localhost:8000">Back to Launchpad Orbit</a></p>
@@ -24,7 +20,7 @@
 
       <div class="card">
         <h2>Parameter Mapping Editor</h2>
-        <div class="row">
+        <div class="grid-3">
           <label>Ruleset ID<input id="ruleset_id" type="number" min="1" value="1" /></label>
           <label>Parameter Name<input id="parameter_name" placeholder="quantity" /></label>
           <label>Display Label<input id="display_label" placeholder="Order Quantity" /></label>
@@ -62,7 +58,7 @@
         <label>Help Text<textarea id="help_text"></textarea></label>
         <label><input type="checkbox" id="is_required" /> Force required in UI</label>
         <label>Options (one per line: value|label|image-url)<textarea id="options"></textarea></label>
-        <button type="button" id="save">Save Mapping</button>
+        <button type="button" id="save" class="primary">Save Mapping</button>
         <p id="status"></p>
       </div>
 

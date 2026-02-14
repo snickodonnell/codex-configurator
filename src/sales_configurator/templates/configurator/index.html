@@ -2,33 +2,29 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Customer Project Configurator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
     <style>
-      body { font-family: Arial, sans-serif; margin: 1.5rem; color: #192034; }
-      .layout { display: grid; grid-template-columns: 380px 1fr; gap: 1rem; align-items: start; }
-      .panel { border: 1px solid #dce2f2; border-radius: 10px; padding: 1rem; background: #fff; }
-      .muted { color: #5a6279; font-size: .9rem; }
-      .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
       .col { display: grid; gap: .6rem; }
-      .project { border: 1px solid #e4e8f5; border-radius: 8px; padding: .7rem; margin-bottom: .7rem; }
-      .project.selected { border-color: #7a8ef7; background: #f8f9ff; }
-      .pill { display: inline-block; border-radius: 20px; padding: .15rem .55rem; font-size: .8rem; background: #edf1ff; margin-left: .4rem; }
-      .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap:.7rem; }
-      .field { border: 1px solid #e4e8f5; border-radius: 8px; padding: .55rem; }
+      .project { border: 1px solid var(--border); border-radius: 10px; padding: .7rem; margin-bottom: .7rem; background: #fbfdff; }
+      .project.selected { border-color: var(--accent); background: #f6f5ff; }
+      .field { border: 1px solid var(--border); border-radius: 8px; padding: .55rem; background: #fff; }
       .rules { max-height: 260px; overflow: auto; }
-      pre { background: #0b1325; color: #d7deef; padding: .7rem; border-radius: 8px; overflow: auto; }
-      button { cursor: pointer; }
-      input, select, textarea { width: 100%; box-sizing: border-box; }
-      .danger { background: #ffe9ec; }
     </style>
   </head>
   <body>
-    <h1>Customer Project Configurator</h1>
-    <p class="muted">Create projects, attach products with quantities, and run configuration with rules/category enforcement and Studio display controls.</p>
-    <form method="post" action="/logout"><button type="submit">Logout</button></form>
+    <div class="page stack">
+      <div class="topbar">
+        <div>
+          <h1 style="margin:0;">Customer Project Configurator</h1>
+          <p class="muted" style="margin:.4rem 0 0;">Create projects, attach products with quantities, and run configuration with rules/category enforcement and Studio display controls.</p>
+        </div>
+        <form method="post" action="/logout"><button type="submit">Logout</button></form>
+      </div>
 
-    <div class="layout">
-      <div class="panel col">
+      <div class="layout-two-col">
+      <div class="card col">
         <h2>Project Workspace</h2>
         <label>Environment <input id="environment" value="dev" /></label>
         <label>Customer ID <input id="customer-id" value="demo-customer" /></label>
@@ -39,7 +35,7 @@
         <div id="project-list"></div>
       </div>
 
-      <div class="panel col">
+      <div class="card col">
         <h2 id="selected-project-title">Configuration</h2>
         <div class="row">
           <label style="flex:1">Add Product
@@ -54,12 +50,13 @@
         <div id="configuration-area" class="col" style="display:none;">
           <h3 id="config-product-name"></h3>
           <div id="status-strip" class="row"></div>
-          <div id="inputs" class="grid"></div>
+          <div id="inputs" class="grid-auto"></div>
           <h4>Rule Category Enforcement</h4>
           <div id="workspace-rules" class="rules"></div>
           <button id="evaluate" type="button">Save + Evaluate Configuration</button>
-          <pre id="result">Choose a project product to configure.</pre>
+          <pre id="result" class="code-block">Choose a project product to configure.</pre>
         </div>
+      </div>
       </div>
     </div>
 
@@ -91,7 +88,7 @@
             <div class="row">
               <button data-action="open">Open</button>
               <button data-action="save">Save Meta</button>
-              <button data-action="delete" class="danger">Delete</button>
+              <button data-action="delete" class="danger" type="button">Delete</button>
             </div>`;
           const statusSelect = document.createElement('select');
           ['draft','in_progress','configured','submitted'].forEach((v) => {

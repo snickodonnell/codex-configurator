@@ -2,17 +2,22 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Platform Login</title>
-    <style>body{font-family:Arial,sans-serif;margin:2rem;max-width:520px}label{display:block;margin:.5rem 0}.error{color:#b00020}</style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
   </head>
   <body>
-    <h1>Platform Login</h1>
-    <p>Admin: <code>admin/admin</code> · Experience editor: <code>ux-admin/ux-admin</code>.</p>
-    {% if error %}<p class="error">{{ error }}</p>{% endif %}
-    <form method="post" action="/login">
-      <label>Username <input name="username" autocomplete="username" /></label>
-      <label>Password <input type="password" name="password" autocomplete="current-password" /></label>
-      <button type="submit">Login</button>
-    </form>
+    <div class="page" style="max-width:560px;">
+      <article class="card stack">
+        <h1 style="margin:0;">Platform Login</h1>
+        <p class="muted" style="margin:0;">Admin: <code>admin/admin</code> · Experience editor: <code>ux-admin/ux-admin</code>.</p>
+        {% if error %}<p style="margin:0;color:#b91c1c;">{{ error }}</p>{% endif %}
+        <form method="post" action="/login" class="stack">
+          <label>Username <input name="username" autocomplete="username" /></label>
+          <label>Password <input type="password" name="password" autocomplete="current-password" /></label>
+          <button type="submit" class="primary">Login</button>
+        </form>
+      </article>
+    </div>
   </body>
 </html>
