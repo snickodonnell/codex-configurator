@@ -13,10 +13,16 @@
   </head>
   <body>
     <div class="page stack">
-      <h1>Experience Studio</h1>
-      <p>Flexibly map rules parameters into customer-facing controls without changing evaluation logic. Workflow: RuleCanvas → Experience Studio → Approval → Deployment.</p>
-      <p><a href="http://localhost:8000">Back to Launchpad Orbit</a></p>
-      <form method="post" action="/logout"><button type="submit">Logout</button></form>
+      <div class="topbar">
+        <div>
+          <h1 style="margin:0;">Experience Studio</h1>
+          <p class="muted" style="margin:.4rem 0 0;">Flexibly map rules parameters into customer-facing controls without changing evaluation logic. Workflow: RuleCanvas → Experience Studio → Approval → Deployment.</p>
+        </div>
+        <div class="row wrap">
+          <a class="button-link" href="http://localhost:8000">Back to Launchpad Orbit</a>
+          <form method="post" action="/logout"><button type="submit">Logout</button></form>
+        </div>
+      </div>
 
       <div class="card">
         <h2>Parameter Mapping Editor</h2>
