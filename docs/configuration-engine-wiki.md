@@ -54,3 +54,16 @@ Core rules logic remains in `evaluate_rules`; Studio does not alter rule executi
 - governance validation failures
 - Studio mapping persistence into ShopFloor schema
 - rollback behavior
+
+
+## Rule DSL notes
+
+Use reason codes for constraints in RuleCanvas DSL:
+
+```text
+CONSTRAINT quantity >= 1 :: ERR_QUANTITY_REQUIRED
+```
+
+Do not use human-readable messages after `::`. If omitted, the engine defaults to `ERR_CONSTRAINT_FAILED`.
+
+Runtime API returns `violations` as objects (`code`, `recommended_severity`, `rule`) plus `violation_codes` as string codes for convenience.

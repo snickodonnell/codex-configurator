@@ -69,10 +69,10 @@ DEFAULT_RULESET = {
         },
     ],
     "constraints": [
-        {"expression": "quantity >= 1", "message": "Quantity must be at least 1."},
+        {"expression": "quantity >= 1", "reason_code": "ERR_QUANTITY_REQUIRED"},
         {
             "expression": "(region != 'EU') or (discount <= 0.2)",
-            "message": "EU discount cannot exceed 20%.",
+            "reason_code": "ERR_EU_DISCOUNT_HIGH",
         },
     ],
     "calculations": [
