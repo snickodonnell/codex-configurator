@@ -324,7 +324,7 @@ def _configure_auth(app: Flask) -> None:
 
     @app.before_request
     def require_login() -> Any:
-        if request.endpoint in {"login", "static"}:
+        if request.endpoint in {"healthz", "login", "static"}:
             return None
         if _is_logged_in():
             return None
@@ -359,6 +359,14 @@ def _configure_auth(app: Flask) -> None:
         return redirect(url_for("login"))
 
 
+def _register_health_endpoint(app: Flask) -> None:
+    @app.get("/healthz")
+    def healthz() -> Any:
+        conn = connect(_db_path(app))
+        conn.execute("SELECT 1").fetchone()
+        return jsonify({"status": "ok", "app": app.config.get("APP_NAME", "unknown")})
+
+
 def create_landing_app(database_path: str | None = None) -> Flask:
     app = Flask(__name__, template_folder="templates")
     _configure_observability(app, "landing")
@@ -369,11 +377,12 @@ def create_landing_app(database_path: str | None = None) -> Flask:
     app.config["EXPERIENCE_STUDIO_URL"] = os.environ.get("EXPERIENCE_STUDIO_URL", "http://localhost:8003")
     app.config["SHOP_FLOOR_URL"] = os.environ.get("SHOP_FLOOR_URL", "http://localhost:8002")
     init_db(_db_path(app))
+    _register_health_endpoint(app)
     _configure_auth(app)
 
     @app.before_request
     def require_admin_role() -> Any:
-        if request.endpoint in {"login", "logout", "static"}:
+        if request.endpoint in {"healthz", "login", "logout", "static"}:
             return None
         if _is_admin():
             return None
@@ -426,11 +435,12 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
     _configure_error_handlers(app)
     app.config["DATABASE_PATH"] = database_path or os.environ.get("RULES_DB_PATH", "./data.db")
     init_db(_db_path(app))
+    _register_health_endpoint(app)
     _configure_auth(app)
 
     @app.before_request
     def require_admin_role() -> Any:
-        if request.endpoint in {"login", "logout", "static"}:
+        if request.endpoint in {"healthz", "login", "logout", "static"}:
             return None
         if _is_admin():
             return None
@@ -947,11 +957,12 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
     _configure_error_handlers(app)
     app.config["DATABASE_PATH"] = database_path or os.environ.get("RULES_DB_PATH", "./data.db")
     init_db(_db_path(app))
+    _register_health_endpoint(app)
     _configure_auth(app)
 
     @app.before_request
     def require_editor_role() -> Any:
-        if request.endpoint in {"login", "logout", "static"}:
+        if request.endpoint in {"healthz", "login", "logout", "static"}:
             return None
         if _is_frontend_editor():
             return None
@@ -1607,11 +1618,12 @@ def create_experience_studio_app(database_path: str | None = None) -> Flask:
     _configure_error_handlers(app)
     app.config["DATABASE_PATH"] = database_path or os.environ.get("RULES_DB_PATH", "./data.db")
     init_db(_db_path(app))
+    _register_health_endpoint(app)
     _configure_auth(app)
 
     @app.before_request
     def require_editor_role() -> Any:
-        if request.endpoint in {"login", "logout", "static"}:
+        if request.endpoint in {"healthz", "login", "logout", "static"}:
             return None
         if _is_frontend_editor():
             return None
