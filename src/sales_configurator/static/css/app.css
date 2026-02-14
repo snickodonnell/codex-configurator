@@ -1,13 +1,19 @@
 :root {
-  --bg: #f4f6fb;
+  --bg: #f2f4f7;
+  --bg-accent: linear-gradient(145deg, #f8fafc 0%, #eef2f7 45%, #e9edf3 100%);
   --card: #ffffff;
-  --text: #172033;
-  --muted: #5d6880;
-  --border: #d7deea;
-  --accent: #4f46e5;
-  --accent-soft: #ede9fe;
-  --danger: #dc2626;
-  --shadow: 0 8px 24px rgba(17, 24, 39, 0.05);
+  --card-soft: #f8fafb;
+  --text: #1b1d36;
+  --muted: #5a677b;
+  --border: #d6dbe4;
+  --accent: #cf3502;
+  --accent-strong: #e55525;
+  --accent-soft: #fff0ea;
+  --brand-dark: #1b1d36;
+  --brand-secondary: #3f4b65;
+  --focus: #419bff;
+  --danger: #b91c1c;
+  --shadow: 0 16px 38px rgba(27, 29, 54, 0.08);
 }
 
 * {
@@ -20,33 +26,33 @@ html {
 
 body {
   margin: 0;
-  font-family: Inter, system-ui, sans-serif;
-  background: var(--bg);
+  font-family: "Arial", "Helvetica Neue", Helvetica, sans-serif;
+  background: var(--bg-accent);
   color: var(--text);
 }
 
 a {
-  color: #4338ca;
+  color: #2968c0;
 }
 
 .page {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 1.25rem;
+  padding: 1.5rem;
 }
 
 .topbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.9rem;
   margin-bottom: 1rem;
 }
 
 .card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 16px;
   padding: 1rem;
   box-shadow: var(--shadow);
 }
@@ -76,8 +82,8 @@ button,
 .button-link {
   border: 1px solid var(--border);
   background: #fff;
-  border-radius: 8px;
-  padding: 0.45rem 0.7rem;
+  border-radius: 10px;
+  padding: 0.5rem 0.85rem;
   cursor: pointer;
   color: inherit;
   font: inherit;
@@ -85,11 +91,27 @@ button,
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+button:hover,
+.button-link:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(27, 29, 54, 0.07);
+}
+
+button:focus-visible,
+.button-link:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
 }
 
 button.primary,
 .button-link.primary {
-  background: var(--accent);
+  background: linear-gradient(120deg, var(--accent) 0%, var(--accent-strong) 100%);
   color: #fff;
   border-color: var(--accent);
 }
@@ -106,9 +128,10 @@ select,
 textarea {
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.5rem;
+  border-radius: 10px;
+  padding: 0.55rem;
   font: inherit;
+  background: #fff;
 }
 
 textarea {
@@ -118,10 +141,11 @@ textarea {
 .pill {
   display: inline-block;
   background: var(--accent-soft);
-  color: #4338ca;
+  color: var(--accent);
   border-radius: 999px;
   font-size: 0.75rem;
-  padding: 0.1rem 0.45rem;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid #ffd2c2;
 }
 
 .layout-two-col {
@@ -157,16 +181,81 @@ table {
 th,
 td {
   border: 1px solid var(--border);
-  padding: 0.45rem;
+  padding: 0.5rem;
   text-align: left;
 }
 
+th {
+  background: #f7f8fb;
+  color: var(--brand-secondary);
+  font-size: 0.82rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 .code-block {
-  background: #0b1325;
-  color: #d7deef;
+  background: #131b34;
+  color: #dfe8ff;
   padding: 0.7rem;
   border-radius: 8px;
   overflow: auto;
+}
+
+.brand-shell {
+  gap: 1rem;
+}
+
+.brand-hero {
+  padding: 1.4rem;
+  background: linear-gradient(130deg, #fff 0%, #f7f8fb 38%, #eef2f9 100%);
+  border: 1px solid #ced6e3;
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+}
+
+.brand-kicker {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 0 0 0.4rem;
+}
+
+.brand-title {
+  margin: 0;
+  font-size: clamp(1.7rem, 2.8vw, 2.6rem);
+  line-height: 1.08;
+  color: var(--brand-dark);
+}
+
+.brand-subtitle {
+  margin: 0.7rem 0 0;
+  max-width: 52rem;
+  font-size: 1rem;
+  color: var(--brand-secondary);
+}
+
+.brand-actions {
+  margin-top: 1rem;
+}
+
+.card.brand-nav {
+  border-top: 4px solid var(--accent);
+}
+
+.brand-nav h2 {
+  margin: 0;
+  color: var(--brand-dark);
+}
+
+.brand-nav .button-link {
+  width: fit-content;
+}
+
+.surface-title {
+  margin: 0;
+  color: var(--brand-dark);
 }
 
 @media (max-width: 980px) {

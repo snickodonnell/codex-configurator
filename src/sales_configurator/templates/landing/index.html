@@ -7,27 +7,35 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
   </head>
   <body>
-    <div class="page stack">
-      <div class="topbar">
-        <div>
-          <h1 style="margin:0;">Launchpad Orbit</h1>
-          <p class="muted" style="margin:.4rem 0 0;">Navigate between RuleCanvas, Experience Studio, and ShopFloor Configurator.</p>
+    <div class="page stack brand-shell">
+      <header class="brand-hero">
+        <div class="topbar" style="margin: 0;">
+          <div>
+            <p class="brand-kicker">Hyperion Configuration Platform</p>
+            <h1 class="brand-title">Launchpad Orbit</h1>
+            <p class="brand-subtitle">Navigate RuleCanvas, Experience Studio, and ShopFloor with a unified Hyperion visual system inspired by your dark blue + steel gray + orange brand guidance.</p>
+          </div>
+          <form method="post" action="/logout"><button type="submit">Logout</button></form>
         </div>
-        <form method="post" action="/logout"><button type="submit">Logout</button></form>
-      </div>
+        <div class="row wrap brand-actions">
+          <span class="pill">Primary #1B1D36</span>
+          <span class="pill">Accent #CF3502</span>
+          <span class="pill">Support #686E7F</span>
+        </div>
+      </header>
 
       <section class="cards-grid">
-        <article class="card">
+        <article class="card brand-nav">
           <h2>RuleCanvas</h2>
           <p class="muted">Author and deploy deterministic product rules.</p>
           <a class="button-link primary" href="{{ rule_canvas_url }}">Open RuleCanvas</a>
         </article>
-        <article class="card">
+        <article class="card brand-nav">
           <h2>Experience Studio</h2>
           <p class="muted">Map rule parameters to rich end-user controls and image-driven styles.</p>
           <a class="button-link primary" href="{{ experience_studio_url }}">Open Experience Studio</a>
         </article>
-        <article class="card">
+        <article class="card brand-nav">
           <h2>ShopFloor Configurator</h2>
           <p class="muted">Customer-facing runtime configurator driven by deployed logic and UI mappings.</p>
           <a class="button-link primary" href="{{ shop_floor_url }}">Open ShopFloor</a>
@@ -35,7 +43,7 @@
       </section>
 
       <section class="card">
-        <h2>Product Rule Sets</h2>
+        <h2 class="surface-title">Product Rule Sets</h2>
         <table>
           <thead><tr><th>ID</th><th>Name</th><th>Environment</th><th>Created</th></tr></thead>
           <tbody>
@@ -49,7 +57,7 @@
       </section>
 
       <section class="card stack">
-        <h2 style="margin:0;">Front-End Enhancements</h2>
+        <h2 class="surface-title">Front-End Enhancements</h2>
         <form class="row wrap" method="post" action="/enhancements">
           <input name="title" placeholder="Enhancement title" required style="max-width:260px;" />
           <input name="status" placeholder="planned/in-progress/done" value="planned" required style="max-width:220px;" />
@@ -69,7 +77,7 @@
       </section>
 
       <section class="card">
-        <h2>Recent End-User Configurations</h2>
+        <h2 class="surface-title">Recent End-User Configurations</h2>
         <table>
           <thead><tr><th>ID</th><th>Customer</th><th>Environment</th><th>Last Updated</th></tr></thead>
           <tbody>
