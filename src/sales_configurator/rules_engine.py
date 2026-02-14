@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import itertools
+import logging
 import math
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -17,6 +18,9 @@ ALLOWED_FUNCTIONS = {
 }
 
 CUSTOM_FUNCTIONS: dict[str, Callable[..., Any]] = {}
+DEFAULT_CONSTRAINT_REASON_CODE = "ERR_CONSTRAINT_FAILED"
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_NODES = (
     ast.Expression,
@@ -68,8 +72,16 @@ class ExpressionProgram:
 class EvaluationResult:
     valid: bool
     calculations: dict[str, float]
-    violations: list[str]
+    violations: list[Violation]
     resolved_configuration: dict[str, Any]
+
+
+@dataclass(slots=True)
+class Violation:
+    code: str
+    recommended_severity: str
+    meta: dict[str, Any]
+    rule: dict[str, str]
 
 
 @dataclass(slots=True)
@@ -80,8 +92,25 @@ class _CalculationSpec:
 
 @dataclass(slots=True)
 class _ConstraintSpec:
-    message: str
+    code: str
+    recommended_severity: str
+    expression_raw: str
     program: ExpressionProgram
+
+
+class _ReferencedVariableVisitor(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.referenced_variables: set[str] = set()
+
+    def visit_Name(self, node: ast.Name) -> Any:
+        self.referenced_variables.add(node.id)
+
+
+def extract_expression_variables(expression: str) -> set[str]:
+    tree = ast.parse(expression, mode="eval")
+    visitor = _ReferencedVariableVisitor()
+    visitor.visit(tree)
+    return visitor.referenced_variables
 
 
 @dataclass(slots=True)
@@ -120,7 +149,13 @@ class RuleEngine:
         defaults = [_compile_default_spec(entry, functions) for entry in normalized.get("default_values", [])]
         constraints = [
             _ConstraintSpec(
-                message=str(constraint["message"]),
+                code=str(
+                    constraint.get("reason_code")
+                    or constraint.get("message")
+                    or DEFAULT_CONSTRAINT_REASON_CODE
+                ),
+                recommended_severity=str(constraint.get("recommended_severity", "BLOCK")),
+                expression_raw=str(constraint["expression"]),
                 program=compile_expression(str(constraint["expression"]), functions),
             )
             for constraint in normalized.get("constraints", [])
@@ -144,11 +179,36 @@ class RuleEngine:
     def evaluate(self, configuration: dict[str, Any]) -> EvaluationResult:
         resolved_configuration = self.apply_default_values(configuration)
 
-        violations: list[str] = []
+        violations: list[Violation] = []
         for constraint in self.constraints:
             result = evaluate_program(constraint.program, resolved_configuration, self.functions)
             if not bool(result):
-                violations.append(constraint.message)
+                referenced_variables = sorted(extract_expression_variables(constraint.expression_raw))
+                snapshot = {
+                    variable: resolved_configuration.get(variable)
+                    for variable in referenced_variables
+                    if variable in resolved_configuration
+                }
+                violation = Violation(
+                    code=constraint.code,
+                    recommended_severity=constraint.recommended_severity,
+                    meta={
+                        "expression_raw": constraint.expression_raw,
+                        "referenced_variables": referenced_variables,
+                        "snapshot": snapshot,
+                        "evaluated_to": False,
+                    },
+                    rule={"type": "CONSTRAINT", "raw": constraint.expression_raw},
+                )
+                violations.append(violation)
+                logger.info(
+                    "constraint_violation",
+                    extra={
+                        "code": violation.code,
+                        "recommended_severity": violation.recommended_severity,
+                        "meta": violation.meta,
+                    },
+                )
 
         calculations: dict[str, float] = {}
         working_context = {**resolved_configuration}
@@ -236,8 +296,7 @@ def normalize_ruleset(ruleset: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def expression_references(expression: str) -> set[str]:
-    tree = ast.parse(expression, mode="eval")
-    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    return extract_expression_variables(expression)
 
 
 def infer_memo_parameters(ruleset: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -428,12 +487,12 @@ def parse_ruleset_pseudocode(pseudo_code: str) -> dict[str, Any]:
         if line.startswith("CONSTRAINT "):
             body = line[len("CONSTRAINT ") :].strip()
             if "::" in body:
-                expression, message = body.split("::", 1)
-                message = message.strip()
+                expression, reason_code = body.split("::", 1)
+                reason_code = reason_code.strip()
             else:
                 expression = body
-                message = "Constraint failed"
-            ruleset["constraints"].append({"expression": expression.strip(), "message": message})
+                reason_code = DEFAULT_CONSTRAINT_REASON_CODE
+            ruleset["constraints"].append({"expression": expression.strip(), "reason_code": reason_code})
             continue
 
         if line.startswith("CALC "):
@@ -482,7 +541,8 @@ def ruleset_to_pseudocode(ruleset: dict[str, Any]) -> str:
                 lines.append(f"DEFAULT {default['name']} = {rhs}")
 
     for constraint in normalized["constraints"]:
-        lines.append(f"CONSTRAINT {constraint['expression']} :: {constraint['message']}")
+        reason_code = constraint.get("reason_code") or constraint.get("message") or DEFAULT_CONSTRAINT_REASON_CODE
+        lines.append(f"CONSTRAINT {constraint['expression']} :: {reason_code}")
 
     for calc in normalized["calculations"]:
         lines.append(f"CALC {calc['name']} = {calc['formula']}")

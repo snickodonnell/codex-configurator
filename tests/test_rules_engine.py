@@ -8,6 +8,7 @@ from sales_configurator.rules_engine import (
     evaluate_program,
     evaluate_rules,
     infer_memo_parameters,
+    extract_expression_variables,
     normalize_ruleset,
     optimize_configuration,
     parse_ruleset_pseudocode,
@@ -71,14 +72,16 @@ def test_evaluate_rules_success() -> None:
 def test_evaluate_rules_with_constraint_violation() -> None:
     ruleset = {
         "constraints": [
-            {"expression": "quantity >= 1", "message": "quantity required"},
-            {"expression": "discount <= 0.2", "message": "discount too high"},
+            {"expression": "quantity >= 1", "reason_code": "ERR_QUANTITY_REQUIRED"},
+            {"expression": "discount <= 0.2", "reason_code": "ERR_DISCOUNT_HIGH"},
         ],
         "calculations": [{"name": "total", "formula": "quantity * unit_price"}],
     }
     result = evaluate_rules(ruleset, {"quantity": 0, "unit_price": 20, "discount": 0.5})
     assert result.valid is False
-    assert result.violations == ["quantity required", "discount too high"]
+    assert [violation.code for violation in result.violations] == ["ERR_QUANTITY_REQUIRED", "ERR_DISCOUNT_HIGH"]
+    assert result.violations[0].recommended_severity == "BLOCK"
+    assert result.violations[0].meta["expression_raw"] == "quantity >= 1"
 
 
 def test_optimize_configuration_minimize_and_keep_resolved_defaults() -> None:
@@ -227,7 +230,7 @@ def test_parse_ruleset_pseudocode() -> None:
     )
     assert parsed["default_values"][0]["name"] == "discount"
     assert parsed["default_values"][1]["rules"][0]["condition"] == "country == 'DE'"
-    assert parsed["constraints"][0]["message"] == "Quantity must be at least 1"
+    assert parsed["constraints"][0]["reason_code"] == "Quantity must be at least 1"
     assert parsed["calculations"][0]["name"] == "total"
     assert parsed["custom_functions"][0]["name"] == "margin"
 
@@ -246,12 +249,12 @@ def test_parse_ruleset_pseudocode_dynamic_formula_default() -> None:
 def test_ruleset_to_pseudocode_round_trip() -> None:
     ruleset = {
         "default_values": [{"name": "discount", "mode": "static", "value": 0.1}],
-        "constraints": [{"expression": "quantity >= 1", "message": "bad qty"}],
+        "constraints": [{"expression": "quantity >= 1", "reason_code": "ERR_BAD_QTY"}],
         "calculations": [{"name": "total", "formula": "base_price * quantity"}],
     }
     pseudo = ruleset_to_pseudocode(ruleset)
     assert "DEFAULT discount = 0.1" in pseudo
-    assert "CONSTRAINT quantity >= 1 :: bad qty" in pseudo
+    assert "CONSTRAINT quantity >= 1 :: ERR_BAD_QTY" in pseudo
 
 
 def test_rule_engine_can_be_reused_for_multiple_evaluations() -> None:
@@ -266,3 +269,13 @@ def test_rule_engine_can_be_reused_for_multiple_evaluations() -> None:
 
     assert first.calculations["total"] == 9
     assert second.calculations["total"] == 18
+
+
+def test_parse_ruleset_pseudocode_constraint_default_reason_code() -> None:
+    parsed = parse_ruleset_pseudocode("CONSTRAINT quantity >= 1")
+    assert parsed["constraints"][0]["reason_code"] == "ERR_CONSTRAINT_FAILED"
+
+
+def test_extract_expression_variables_for_constraint_metadata() -> None:
+    variables = extract_expression_variables("quantity >= min_qty and discount <= max_discount")
+    assert variables == {"quantity", "min_qty", "discount", "max_discount"}

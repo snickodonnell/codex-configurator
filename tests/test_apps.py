@@ -256,6 +256,74 @@ def test_evaluate_and_submit(tmp_path) -> None:
     assert submitted_row["status"] == "submitted"
 
 
+
+def test_evaluate_api_serializes_violations_without_meta_by_default(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    rules = create_rules_engine_app(str(db))
+    rules_client = rules.test_client()
+    login(rules_client)
+    seed_ruleset(
+        rules_client,
+        '{"constraints":[{"expression":"quantity>=1","reason_code":"ERR_QUANTITY_REQUIRED"}],"calculations":[]}',
+    )
+    rules_client.post("/deploy/1", data={"environment": "dev"})
+
+    app = create_configurator_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    evaluate = client.post(
+        "/api/evaluate",
+        json={
+            "customer_id": "demo-customer",
+            "api_key": "demo-key",
+            "environment": "dev",
+            "configuration": {"quantity": 0},
+        },
+    )
+    assert evaluate.status_code == 200
+    body = evaluate.get_json()
+    assert body["violations"] == [
+        {
+            "code": "ERR_QUANTITY_REQUIRED",
+            "recommended_severity": "BLOCK",
+            "rule": {"type": "CONSTRAINT", "raw": "quantity>=1"},
+        }
+    ]
+    assert body["violation_codes"] == ["ERR_QUANTITY_REQUIRED"]
+    assert "violations_debug" not in body
+
+
+def test_evaluate_api_include_meta_flag_returns_violations_debug(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    rules = create_rules_engine_app(str(db))
+    rules_client = rules.test_client()
+    login(rules_client)
+    seed_ruleset(
+        rules_client,
+        '{"constraints":[{"expression":"quantity>=1","reason_code":"ERR_QUANTITY_REQUIRED"}],"calculations":[]}',
+    )
+    rules_client.post("/deploy/1", data={"environment": "dev"})
+
+    app = create_configurator_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    evaluate = client.post(
+        "/api/evaluate?include_meta=true",
+        json={
+            "customer_id": "demo-customer",
+            "api_key": "demo-key",
+            "environment": "dev",
+            "configuration": {"quantity": 0},
+        },
+    )
+    assert evaluate.status_code == 200
+    body = evaluate.get_json()
+    assert body["violation_codes"] == ["ERR_QUANTITY_REQUIRED"]
+    assert body["violations_debug"][0]["meta"]["evaluated_to"] is False
+    assert body["violations_debug"][0]["meta"]["snapshot"] == {"quantity": 0}
+
 def test_evaluate_forbidden_with_wrong_api_key(tmp_path) -> None:
     db = tmp_path / "app.db"
     app = create_configurator_app(str(db))
