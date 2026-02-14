@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from werkzeug.exceptions import BadRequest, HTTPException
 
 from .db import connect, init_db, json_dumps
 from .rules_engine import (
@@ -87,6 +89,62 @@ UX_EDITOR_PASSWORD = "ux-admin"
 
 def _db_path(app: Flask) -> Path:
     return Path(app.config["DATABASE_PATH"])
+
+
+def _configure_observability(app: Flask, app_name: str) -> None:
+    app.config["APP_NAME"] = app_name
+    level_name = os.environ.get("APP_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    app.logger.setLevel(level)
+
+
+def _is_api_request() -> bool:
+    return request.path.startswith("/api/") or request.path == "/optimize"
+
+
+def _configure_error_handlers(app: Flask) -> None:
+    @app.errorhandler(BadRequest)
+    def handle_bad_request(error: BadRequest) -> Any:
+        app.logger.warning("bad_request", extra={"path": request.path, "method": request.method, "error": str(error)})
+        if _is_api_request():
+            return jsonify({"error": "invalid request payload"}), 400
+        return error
+
+    @app.errorhandler(HTTPException)
+    def handle_http_error(error: HTTPException) -> Any:
+        app.logger.warning(
+            "http_error",
+            extra={"path": request.path, "method": request.method, "status_code": error.code, "error": error.description},
+        )
+        if _is_api_request():
+            return jsonify({"error": error.description}), error.code
+        return error
+
+    @app.errorhandler(Exception)
+    def handle_unexpected_error(error: Exception) -> Any:
+        app.logger.exception("unexpected_error", extra={"path": request.path, "method": request.method})
+        if _is_api_request():
+            return jsonify({"error": "internal server error"}), 500
+        raise error
+
+
+def _log_configuration_state_change(
+    app: Flask,
+    source: str,
+    customer_id: str,
+    environment: str,
+    state: dict[str, Any],
+) -> None:
+    app.logger.info(
+        "configuration_state_changed",
+        extra={
+            "source": source,
+            "customer_id": customer_id,
+            "environment": environment,
+            "parameter_count": len(state),
+            "keys": sorted(state.keys()),
+        },
+    )
 
 
 def _load_deployed_ruleset(conn: Any, environment: str) -> dict[str, Any]:
@@ -283,22 +341,28 @@ def _configure_auth(app: Flask) -> None:
             if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
                 session["username"] = ADMIN_USERNAME
                 session["role"] = "admin"
+                app.logger.info("login_success", extra={"username": username, "role": "admin"})
                 return redirect(url_for("index"))
             if username == UX_EDITOR_USERNAME and password == UX_EDITOR_PASSWORD:
                 session["username"] = UX_EDITOR_USERNAME
                 session["role"] = "frontend_editor"
+                app.logger.info("login_success", extra={"username": username, "role": "frontend_editor"})
                 return redirect(url_for("index"))
+            app.logger.warning("login_failed", extra={"username": username})
             error = "Invalid credentials"
         return render_template("login.html", error=error)
 
     @app.post("/logout")
     def logout() -> Any:
+        app.logger.info("logout", extra={"username": session.get("username", "anonymous")})
         session.clear()
         return redirect(url_for("login"))
 
 
 def create_landing_app(database_path: str | None = None) -> Flask:
     app = Flask(__name__, template_folder="templates")
+    _configure_observability(app, "landing")
+    _configure_error_handlers(app)
     app.config["DATABASE_PATH"] = database_path or os.environ.get("RULES_DB_PATH", "./data.db")
     app.config["RULES_ENGINE_URL"] = os.environ.get("RULES_ENGINE_URL", "http://localhost:8001")
     app.config["RULE_CANVAS_URL"] = os.environ.get("RULE_CANVAS_URL", "http://localhost:8001")
@@ -358,6 +422,8 @@ def create_landing_app(database_path: str | None = None) -> Flask:
 
 def create_rules_engine_app(database_path: str | None = None) -> Flask:
     app = Flask(__name__, template_folder="templates")
+    _configure_observability(app, "rules")
+    _configure_error_handlers(app)
     app.config["DATABASE_PATH"] = database_path or os.environ.get("RULES_DB_PATH", "./data.db")
     init_db(_db_path(app))
     _configure_auth(app)
@@ -685,6 +751,17 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
                 persisted_ruleset_id = int(cursor.lastrowid)
 
             _sync_ruleset_workflow(conn, int(persisted_ruleset_id), environment, normalized)
+        app.logger.info(
+            "ruleset_saved",
+            extra={
+                "ruleset_id": int(persisted_ruleset_id),
+                "environment": environment,
+                "product_name": product_name,
+                "category": category,
+                "subcategory": subcategory,
+                "version": version,
+            },
+        )
         return redirect(url_for("index"))
 
     @app.post("/workflow/<int:ruleset_id>/send-to-studio")
@@ -698,6 +775,7 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
                 "UPDATE release_workflows SET state = 'in_studio', updated_at = CURRENT_TIMESTAMP WHERE ruleset_id = ?",
                 (ruleset_id,),
             )
+        app.logger.info("workflow_state_changed", extra={"ruleset_id": ruleset_id, "state": "in_studio"})
         return redirect(url_for("index"))
 
     @app.post("/workflow/<int:ruleset_id>/request-approval")
@@ -713,6 +791,7 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
                 "UPDATE release_workflows SET state = 'pending_approval', updated_at = CURRENT_TIMESTAMP WHERE ruleset_id = ?",
                 (ruleset_id,),
             )
+        app.logger.info("workflow_state_changed", extra={"ruleset_id": ruleset_id, "state": "pending_approval"})
         return redirect(url_for("index"))
 
     @app.post("/workflow/<int:ruleset_id>/approve")
@@ -732,6 +811,7 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
                 """,
                 (session.get("username", "admin"), ruleset_id),
             )
+        app.logger.info("workflow_state_changed", extra={"ruleset_id": ruleset_id, "state": "approved"})
         return redirect(url_for("index"))
 
     @app.post("/deploy/<int:ruleset_id>")
@@ -767,6 +847,7 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
                 "UPDATE release_workflows SET state = 'deployed', updated_at = CURRENT_TIMESTAMP WHERE ruleset_id = ?",
                 (ruleset_id,),
             )
+        app.logger.info("deployment_changed", extra={"environment": environment, "ruleset_id": ruleset_id, "action": "deploy"})
         return redirect(url_for("index"))
 
     @app.post("/rollback")
@@ -797,6 +878,7 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
                 "UPDATE release_workflows SET state = 'rolled_back', updated_at = CURRENT_TIMESTAMP WHERE ruleset_id = ?",
                 (previous_ruleset_id,),
             )
+        app.logger.info("deployment_changed", extra={"environment": environment, "ruleset_id": previous_ruleset_id, "action": "rollback"})
         return redirect(url_for("index"))
 
     @app.post("/optimize")
@@ -817,6 +899,8 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
 
 def create_configurator_app(database_path: str | None = None) -> Flask:
     app = Flask(__name__, template_folder="templates")
+    _configure_observability(app, "configurator")
+    _configure_error_handlers(app)
     app.config["DATABASE_PATH"] = database_path or os.environ.get("RULES_DB_PATH", "./data.db")
     init_db(_db_path(app))
     _configure_auth(app)
@@ -1177,6 +1261,14 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
                 (customer_id, environment, json_dumps(evaluated.resolved_configuration)),
             )
 
+        _log_configuration_state_change(
+            app,
+            source="project.evaluate",
+            customer_id=str(customer_id),
+            environment=str(environment),
+            state=evaluated.resolved_configuration,
+        )
+
         return jsonify(
             {
                 "valid": evaluated.valid,
@@ -1316,6 +1408,14 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
                 (customer_id, environment, json_dumps(evaluated.resolved_configuration)),
             )
 
+        _log_configuration_state_change(
+            app,
+            source="configurator.evaluate",
+            customer_id=str(customer_id),
+            environment=str(environment),
+            state=evaluated.resolved_configuration,
+        )
+
         response["configuration_memo"]["id"] = memo_id
         return jsonify(response)
 
@@ -1363,6 +1463,10 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
                     json_dumps({"specification": specification}),
                 ),
             )
+        app.logger.info(
+            "configuration_submitted",
+            extra={"customer_id": customer_id, "environment": environment, "ruleset_id": deployed["ruleset_id"]},
+        )
         return jsonify({"status": "submitted"})
 
     return app
@@ -1370,6 +1474,8 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
 
 def create_experience_studio_app(database_path: str | None = None) -> Flask:
     app = Flask(__name__, template_folder="templates")
+    _configure_observability(app, "experience")
+    _configure_error_handlers(app)
     app.config["DATABASE_PATH"] = database_path or os.environ.get("RULES_DB_PATH", "./data.db")
     init_db(_db_path(app))
     _configure_auth(app)
@@ -1576,6 +1682,10 @@ def create_experience_studio_app(database_path: str | None = None) -> Flask:
                 """,
                 (next_version, ruleset_id),
             )
+        app.logger.info(
+            "studio_mapping_saved",
+            extra={"ruleset_id": ruleset_id, "parameter_name": parameter_name, "schema_version": next_version},
+        )
         return jsonify({"status": "ok", "schema_version": next_version})
 
     @app.get("/api/schema-history")

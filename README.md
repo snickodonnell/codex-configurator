@@ -54,6 +54,15 @@ ShopFloor consumes the active deployed ruleset + matching studio mappings via:
 
 Core rules logic remains unchanged and still executes through `evaluate_rules`.
 
+## Runtime safety and observability
+
+- API routes now use a shared error policy:
+  - malformed JSON requests return `400 {"error": "invalid request payload"}`
+  - HTTP errors from `abort(...)` are returned as standardized JSON for API clients
+  - unhandled exceptions are logged server-side and returned as `500 {"error": "internal server error"}` for API routes
+- Authentication, rules workflow transitions, deploy/rollback events, and Studio mapping updates are logged.
+- Configuration state persistence now emits `configuration_state_changed` logs so operators can trace customer/runtime state transitions.
+
 ## Run locally
 
 ```bash

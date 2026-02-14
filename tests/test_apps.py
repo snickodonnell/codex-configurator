@@ -673,3 +673,52 @@ def test_workflow_rollback_uses_previous_deployment(tmp_path) -> None:
     client.post("/rollback", data={"environment": "dev"})
     deployed = connect(db).execute("SELECT ruleset_id FROM deployments WHERE environment = 'dev'").fetchone()
     assert deployed["ruleset_id"] == 1
+
+
+def test_api_returns_standard_error_for_invalid_json_payload(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    app = create_configurator_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    response = client.post("/api/evaluate", data="{bad", content_type="application/json")
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "invalid request payload"}
+
+
+def test_evaluate_logs_configuration_state_change(tmp_path, caplog) -> None:
+    db = tmp_path / "app.db"
+    app = create_configurator_app(str(db))
+    client = app.test_client()
+    login(client)
+
+    caplog.set_level("INFO")
+    response = client.post(
+        "/api/evaluate",
+        json={
+            "customer_id": "demo-customer",
+            "api_key": "demo-key",
+            "environment": "dev",
+            "configuration": {"quantity": 2, "base_price": 10, "discount": 0.1, "region": "NA"},
+        },
+    )
+    assert response.status_code == 200
+
+    assert any(record.message == "configuration_state_changed" for record in caplog.records)
+
+
+def test_rules_engine_logs_workflow_state_changes(tmp_path, caplog) -> None:
+    db = tmp_path / "app.db"
+    app = create_rules_engine_app(str(db))
+    client = app.test_client()
+    login(client)
+    seed_ruleset(
+        client,
+        '{"constraints":[{"expression":"quantity>=1","message":"x"}],"calculations":[]}',
+    )
+
+    caplog.set_level("INFO")
+    response = client.post("/workflow/1/send-to-studio")
+    assert response.status_code == 302
+
+    assert any(record.message == "workflow_state_changed" for record in caplog.records)
