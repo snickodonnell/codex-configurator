@@ -1,61 +1,65 @@
 # Experience Studio Wiki
 
-Experience Studio is the dedicated UI-configuration editor that maps rule parameters to customer-facing controls.
+Experience Studio is the governed UX mapping stage between RuleCanvas authoring and ShopFloor runtime consumption.
 
-## Purpose
+## End-to-end process
 
-Experience Studio lets a privileged role configure how each parameter appears in ShopFloor without modifying business logic, constraint expressions, or calculation formulas.
+1. Rules are authored/updated in **RuleCanvas**.
+2. Rule save computes a fingerprint and sets workflow to `draft`.
+3. Release is sent to Studio (`in_studio`).
+4. UX editor maps rule parameters to allowed controls.
+5. Workflow moves to `pending_approval` and then `approved`.
+6. Approved release can be deployed and consumed by ShopFloor.
 
-## Roles
+## Governance model
 
-- `admin`: full access (RuleCanvas + Experience Studio + ShopFloor + Launchpad Orbit)
-- `ux-admin`: Experience Studio authoring access
+Studio reads `ruleset_parameter_profiles` per ruleset and enforces allowed control types:
+
+- boolean → `radio_boolean`, `dropdown`, `button_group`
+- number → `number`, `slider`, `dropdown`, `button_group`
+- string → `text`, `dropdown`, `button_group`
+- intermediate → `text`
+
+If a mapping violates governance, the API rejects it.
+
+## Mandatory UX updates
+
+Rules changes update a fingerprint. If changed compared to prior release lineage, workflow is marked `requires_ux_update=1`.
+
+While this flag is set:
+
+- approval is blocked
+- deployment is blocked
+
+Saving Studio mappings clears the flag and increments `ux_schema_version`.
 
 ## Data model
 
-### `ui_parameter_configs`
-
-Stores one mapping row per parameter:
-
-- `parameter_name`
-- `display_label`
-- `help_text`
-- `control_type` (`text`, `number`, `radio_boolean`, `slider`, `dropdown`, `button_group`)
-- `display_style` (`classic`, `card`, `accent`, `pill`, `tile`)
-- `min_value`, `max_value`, `step_value`
-- `placeholder`
-- `image_url`
-- `value_image_mode`
-- `is_required`
-
-### `ui_parameter_options`
-
-Stores predefined option rows:
-
-- `parameter_name`
-- `option_value`
-- `option_label`
-- `option_order`
-- `image_url`
+- `release_workflows`: state machine + UX sync requirement.
+- `ruleset_parameter_profiles`: per-ruleset governance controls.
+- `ui_parameter_configs`: mapping row scoped to `ruleset_id`.
+- `ui_parameter_options`: value options scoped to `ruleset_id`.
+- `ui_schema_history`: version history for Studio edits.
+- `deployment_history`: deployment and rollback audit trail.
 
 ## APIs
 
-### Experience Studio app
+### Studio
 
-- `GET /api/mappings` – list all mappings with options
-- `POST /api/mappings` – upsert one mapping and replace options for that parameter
+- `GET /api/mappings?ruleset_id=<id>`
+- `POST /api/mappings`
+- `GET /api/schema-history?ruleset_id=<id>`
 
-### ShopFloor app
+### Rules workflow
 
-- `GET /api/ui-schema?environment=dev` – resolve deployed memo schema + apply UI mappings
+- `POST /workflow/<ruleset_id>/send-to-studio`
+- `POST /workflow/<ruleset_id>/request-approval`
+- `POST /workflow/<ruleset_id>/approve`
+- `POST /deploy/<ruleset_id>`
+- `POST /rollback`
 
-## Workflow
+### ShopFloor runtime
 
-1. Author and deploy rules in RuleCanvas.
-2. Open Experience Studio and map parameters to control types/styles/options.
-3. Open ShopFloor and load schema.
-4. Evaluate + submit configurations.
+- `GET /api/ui-schema?environment=...`
 
-## Important boundary
-
-Experience Studio is a **presentation layer editor only**. Rule evaluation remains in the existing rules engine runtime (`evaluate_rules`) and deployment mechanism.
+ShopFloor applies deployed ruleset mappings only; core rules computation is still done by the rules engine.

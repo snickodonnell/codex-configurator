@@ -18,13 +18,14 @@
   <body>
     <div class="wrap">
       <h1>Experience Studio</h1>
-      <p>Flexibly map rules parameters into customer-facing controls without changing evaluation logic.</p>
+      <p>Flexibly map rules parameters into customer-facing controls without changing evaluation logic. Workflow: RuleCanvas → Experience Studio → Approval → Deployment.</p>
       <p><a href="http://localhost:8000">Back to Launchpad Orbit</a></p>
       <form method="post" action="/logout"><button type="submit">Logout</button></form>
 
       <div class="card">
         <h2>Parameter Mapping Editor</h2>
         <div class="row">
+          <label>Ruleset ID<input id="ruleset_id" type="number" min="1" value="1" /></label>
           <label>Parameter Name<input id="parameter_name" placeholder="quantity" /></label>
           <label>Display Label<input id="display_label" placeholder="Order Quantity" /></label>
           <label>Control Type
@@ -67,6 +68,7 @@
 
       <div class="card">
         <h2>Saved mappings</h2>
+        <p id="governance"></p>
         <table>
           <thead><tr><th>Parameter</th><th>Label</th><th>Control</th><th>Style</th><th>Options</th></tr></thead>
           <tbody id="rows"></tbody>
@@ -83,10 +85,12 @@
       }
 
       async function refresh(){
-        const res = await fetch('/api/mappings');
+        const rid = document.getElementById('ruleset_id').value || '1';
+        const res = await fetch(`/api/mappings?ruleset_id=${encodeURIComponent(rid)}`);
         const body = await res.json();
         const rows = document.getElementById('rows');
         rows.innerHTML = '';
+        document.getElementById('governance').textContent = `Governance parameters: ${Object.keys(body.governance || {}).length}`;
         body.mappings.forEach((mapping)=>{
           const tr = document.createElement('tr');
           tr.innerHTML = `<td>${mapping.parameter_name}</td><td>${mapping.display_label}</td><td>${mapping.control_type}</td><td>${mapping.display_style}</td><td>${mapping.options.length}</td>`;
@@ -96,6 +100,7 @@
 
       document.getElementById('save').onclick = async ()=>{
         const payload = {
+          ruleset_id: Number(document.getElementById('ruleset_id').value),
           parameter_name: document.getElementById('parameter_name').value,
           display_label: document.getElementById('display_label').value,
           control_type: document.getElementById('control_type').value,
@@ -115,6 +120,7 @@
         await refresh();
       };
 
+      document.getElementById('ruleset_id').addEventListener('change', refresh);
       refresh();
     </script>
   </body>

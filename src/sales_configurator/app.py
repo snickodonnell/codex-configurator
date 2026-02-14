@@ -124,6 +124,98 @@ def _load_deployed_ruleset(conn: Any, environment: str) -> dict[str, Any]:
     }
 
 
+
+
+def _parameter_governance(parameter: dict[str, Any]) -> list[str]:
+    data_type = str(parameter.get("data_type", "string"))
+    parameter_class = str(parameter.get("parameter_class", "optional_input"))
+    if parameter_class == "intermediate":
+        return ["text"]
+    if data_type == "boolean":
+        return ["radio_boolean", "dropdown", "button_group"]
+    if data_type == "number":
+        return ["number", "slider", "dropdown", "button_group"]
+    return ["text", "dropdown", "button_group"]
+
+
+def _rules_fingerprint(ruleset: dict[str, Any]) -> str:
+    parameters = []
+    for parameter in infer_memo_parameters(ruleset):
+        parameters.append(
+            {
+                "name": parameter["name"],
+                "data_type": parameter["data_type"],
+                "parameter_class": parameter["parameter_class"],
+                "allowed_controls": _parameter_governance(parameter),
+            }
+        )
+    return json_dumps({"parameters": sorted(parameters, key=lambda item: item["name"])})
+
+
+def _sync_ruleset_workflow(conn: Any, ruleset_id: int, environment: str, ruleset: dict[str, Any]) -> None:
+    fingerprint = _rules_fingerprint(ruleset)
+    previous = conn.execute(
+        """
+        SELECT wf.rules_fingerprint
+        FROM release_workflows wf
+        JOIN rulesets r ON wf.ruleset_id = r.id
+        WHERE r.environment = ? AND r.id != ?
+        ORDER BY r.version DESC, r.id DESC
+        LIMIT 1
+        """,
+        (environment, ruleset_id),
+    ).fetchone()
+    requires_ux_update = 0
+    if previous and previous["rules_fingerprint"] != fingerprint:
+        requires_ux_update = 1
+
+    conn.execute(
+        "DELETE FROM ruleset_parameter_profiles WHERE ruleset_id = ?",
+        (ruleset_id,),
+    )
+    parameters = infer_memo_parameters(ruleset)
+    conn.executemany(
+        """
+        INSERT INTO ruleset_parameter_profiles(ruleset_id, parameter_name, data_type, parameter_class, governance_control_types)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                ruleset_id,
+                parameter["name"],
+                parameter["data_type"],
+                parameter["parameter_class"],
+                json_dumps({"allowed": _parameter_governance(parameter)}),
+            )
+            for parameter in parameters
+        ],
+    )
+
+    conn.execute(
+        """
+        INSERT INTO release_workflows(ruleset_id, environment, rules_fingerprint, state, requires_ux_update, ux_schema_version)
+        VALUES (?, ?, ?, 'draft', ?, 0)
+        ON CONFLICT(ruleset_id) DO UPDATE SET
+            environment = excluded.environment,
+            rules_fingerprint = excluded.rules_fingerprint,
+            state = 'draft',
+            requires_ux_update = excluded.requires_ux_update,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (ruleset_id, environment, fingerprint, requires_ux_update),
+    )
+
+
+def _workflow_for_ruleset(conn: Any, ruleset_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT id, ruleset_id, environment, state, requires_ux_update, ux_schema_version, approved_by, updated_at
+        FROM release_workflows WHERE ruleset_id = ?
+        """,
+        (ruleset_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
 def _build_configuration_memo_schema(ruleset: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
     params = infer_memo_parameters(ruleset)
     grouped = {
@@ -295,6 +387,10 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
             """
         ).fetchall()
         deployments = conn.execute("SELECT environment, ruleset_id, deployed_at FROM deployments").fetchall()
+        workflow_rows = conn.execute(
+            "SELECT ruleset_id, state, requires_ux_update, ux_schema_version, approved_by, updated_at FROM release_workflows"
+        ).fetchall()
+        workflows = {row["ruleset_id"]: dict(row) for row in workflow_rows}
         selected_pseudocode = ""
         if selected_ruleset:
             selected_pseudocode = ruleset_to_pseudocode(json.loads(selected_ruleset["payload"]))
@@ -306,6 +402,7 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
             selected_ruleset=selected_ruleset,
             selected_pseudocode=selected_pseudocode,
             parse_error=request.args.get("error", ""),
+            workflows=workflows,
         )
 
     @app.get("/api/workspace")
@@ -545,9 +642,11 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
             target = int(ruleset_id) if ruleset_id else ""
             return redirect(url_for("index", edit=target, error=str(exc)))
 
+        normalized = normalize_ruleset(parsed)
         conn = connect(_db_path(app))
+        persisted_ruleset_id = int(ruleset_id) if ruleset_id else None
         with conn:
-            if ruleset_id:
+            if persisted_ruleset_id is not None:
                 conn.execute(
                     """
                     UPDATE rulesets
@@ -561,12 +660,12 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
                         category,
                         subcategory,
                         version,
-                        json_dumps(normalize_ruleset(parsed)),
-                        int(ruleset_id),
+                        json_dumps(normalized),
+                        persisted_ruleset_id,
                     ),
                 )
             else:
-                conn.execute(
+                cursor = conn.execute(
                     """
                     INSERT INTO rulesets(name, environment, product_name, category, subcategory, version, payload)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -578,16 +677,72 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
                         category,
                         subcategory,
                         version,
-                        json_dumps(normalize_ruleset(parsed)),
+                        json_dumps(normalized),
                     ),
                 )
+                persisted_ruleset_id = int(cursor.lastrowid)
+
+            _sync_ruleset_workflow(conn, int(persisted_ruleset_id), environment, normalized)
+        return redirect(url_for("index"))
+
+    @app.post("/workflow/<int:ruleset_id>/send-to-studio")
+    def send_to_studio(ruleset_id: int) -> Any:
+        conn = connect(_db_path(app))
+        with conn:
+            workflow = _workflow_for_ruleset(conn, ruleset_id)
+            if not workflow:
+                return jsonify({"error": "workflow not found"}), 404
+            conn.execute(
+                "UPDATE release_workflows SET state = 'in_studio', updated_at = CURRENT_TIMESTAMP WHERE ruleset_id = ?",
+                (ruleset_id,),
+            )
+        return redirect(url_for("index"))
+
+    @app.post("/workflow/<int:ruleset_id>/request-approval")
+    def request_approval(ruleset_id: int) -> Any:
+        conn = connect(_db_path(app))
+        with conn:
+            workflow = _workflow_for_ruleset(conn, ruleset_id)
+            if not workflow:
+                return jsonify({"error": "workflow not found"}), 404
+            if workflow["requires_ux_update"]:
+                return redirect(url_for("index", error="UX mapping must be refreshed before approval"))
+            conn.execute(
+                "UPDATE release_workflows SET state = 'pending_approval', updated_at = CURRENT_TIMESTAMP WHERE ruleset_id = ?",
+                (ruleset_id,),
+            )
+        return redirect(url_for("index"))
+
+    @app.post("/workflow/<int:ruleset_id>/approve")
+    def approve_release(ruleset_id: int) -> Any:
+        conn = connect(_db_path(app))
+        with conn:
+            workflow = _workflow_for_ruleset(conn, ruleset_id)
+            if not workflow:
+                return jsonify({"error": "workflow not found"}), 404
+            if workflow["requires_ux_update"]:
+                return redirect(url_for("index", error="Cannot approve while UX update is required"))
+            conn.execute(
+                """
+                UPDATE release_workflows
+                SET state = 'approved', approved_by = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE ruleset_id = ?
+                """,
+                (session.get("username", "admin"), ruleset_id),
+            )
         return redirect(url_for("index"))
 
     @app.post("/deploy/<int:ruleset_id>")
     def deploy(ruleset_id: int) -> Any:
         environment = request.form.get("environment", "dev")
         conn = connect(_db_path(app))
+        workflow = _workflow_for_ruleset(conn, ruleset_id)
+        if workflow and workflow["state"] in {"in_studio", "pending_approval", "approved"}:
+            if workflow["state"] != "approved" or workflow["requires_ux_update"]:
+                return redirect(url_for("index", error="Release must be approved with synced UX mapping before deploy"))
+
         with conn:
+            previous = conn.execute("SELECT ruleset_id FROM deployments WHERE environment = ?", (environment,)).fetchone()
             conn.execute(
                 """
                 INSERT INTO deployments(environment, ruleset_id) VALUES (?, ?)
@@ -596,6 +751,49 @@ def create_rules_engine_app(database_path: str | None = None) -> Flask:
                 deployed_at = CURRENT_TIMESTAMP
                 """,
                 (environment, ruleset_id),
+            )
+            conn.execute(
+                "INSERT INTO deployment_history(environment, ruleset_id, action) VALUES (?, ?, 'deploy')",
+                (environment, ruleset_id),
+            )
+            if previous:
+                conn.execute(
+                    "INSERT INTO deployment_history(environment, ruleset_id, action) VALUES (?, ?, 'replaced')",
+                    (environment, int(previous["ruleset_id"])),
+                )
+            conn.execute(
+                "UPDATE release_workflows SET state = 'deployed', updated_at = CURRENT_TIMESTAMP WHERE ruleset_id = ?",
+                (ruleset_id,),
+            )
+        return redirect(url_for("index"))
+
+    @app.post("/rollback")
+    def rollback_deployment() -> Any:
+        environment = request.form.get("environment", "dev")
+        conn = connect(_db_path(app))
+        history = conn.execute(
+            """
+            SELECT ruleset_id FROM deployment_history
+            WHERE environment = ? AND action = 'deploy'
+            ORDER BY id DESC LIMIT 2
+            """,
+            (environment,),
+        ).fetchall()
+        if len(history) < 2:
+            return redirect(url_for("index", error="No previous deployment available for rollback"))
+        previous_ruleset_id = int(history[1]["ruleset_id"])
+        with conn:
+            conn.execute(
+                "UPDATE deployments SET ruleset_id = ?, deployed_at = CURRENT_TIMESTAMP WHERE environment = ?",
+                (previous_ruleset_id, environment),
+            )
+            conn.execute(
+                "INSERT INTO deployment_history(environment, ruleset_id, action) VALUES (?, ?, 'rollback')",
+                (environment, previous_ruleset_id),
+            )
+            conn.execute(
+                "UPDATE release_workflows SET state = 'rolled_back', updated_at = CURRENT_TIMESTAMP WHERE ruleset_id = ?",
+                (previous_ruleset_id,),
             )
         return redirect(url_for("index"))
 
@@ -649,17 +847,29 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
         conn = connect(_db_path(app))
         deployed = _load_deployed_ruleset(conn, environment)
         schema = _build_configuration_memo_schema(deployed["rules"], deployed)
-        rows = conn.execute(
-            """
-            SELECT parameter_name, display_label, help_text, control_type, display_style,
-                   min_value, max_value, step_value, placeholder, image_url, value_image_mode, is_required
-            FROM ui_parameter_configs
-            ORDER BY parameter_name
-            """
-        ).fetchall()
-        options = conn.execute(
-            "SELECT parameter_name, option_value, option_label, option_order, image_url FROM ui_parameter_options ORDER BY parameter_name, option_order, id"
-        ).fetchall()
+        ruleset_id = int(deployed["ruleset_id"]) if deployed["ruleset_id"] is not None else None
+        rows = []
+        options = []
+        if ruleset_id is not None:
+            rows = conn.execute(
+                """
+                SELECT parameter_name, display_label, help_text, control_type, display_style,
+                       min_value, max_value, step_value, placeholder, image_url, value_image_mode, is_required
+                FROM ui_parameter_configs
+                WHERE ruleset_id = ?
+                ORDER BY parameter_name
+                """,
+                (ruleset_id,),
+            ).fetchall()
+            options = conn.execute(
+                """
+                SELECT parameter_name, option_value, option_label, option_order, image_url
+                FROM ui_parameter_options
+                WHERE ruleset_id = ?
+                ORDER BY parameter_name, option_order, id
+                """,
+                (ruleset_id,),
+            ).fetchall()
 
         by_name = {row["parameter_name"]: dict(row) for row in rows}
         options_by_name: dict[str, list[dict[str, Any]]] = {}
@@ -824,38 +1034,113 @@ def create_experience_studio_app(database_path: str | None = None) -> Flask:
 
     @app.get("/api/mappings")
     def mappings() -> Any:
+        ruleset_id = request.args.get("ruleset_id", type=int)
         conn = connect(_db_path(app))
+        if not ruleset_id:
+            latest = conn.execute("SELECT id FROM rulesets ORDER BY id DESC LIMIT 1").fetchone()
+            ruleset_id = int(latest["id"]) if latest else 0
+
         rows = conn.execute(
             """
-            SELECT id, parameter_name, display_label, help_text, control_type, display_style,
-                   min_value, max_value, step_value, placeholder, image_url, value_image_mode, is_required
+            SELECT id, parameter_name, ruleset_id, display_label, help_text, control_type, display_style,
+                   min_value, max_value, step_value, placeholder, image_url, value_image_mode, is_required, schema_version
             FROM ui_parameter_configs
+            WHERE ruleset_id = ?
             ORDER BY parameter_name
-            """
+            """,
+            (ruleset_id,),
         ).fetchall()
         option_rows = conn.execute(
-            "SELECT id, parameter_name, option_value, option_label, option_order, image_url FROM ui_parameter_options ORDER BY parameter_name, option_order, id"
+            """
+            SELECT id, parameter_name, ruleset_id, option_value, option_label, option_order, image_url
+            FROM ui_parameter_options
+            WHERE ruleset_id = ?
+            ORDER BY parameter_name, option_order, id
+            """,
+            (ruleset_id,),
         ).fetchall()
+        profiles = conn.execute(
+            """
+            SELECT parameter_name, data_type, parameter_class, governance_control_types
+            FROM ruleset_parameter_profiles
+            WHERE ruleset_id = ?
+            ORDER BY parameter_name
+            """,
+            (ruleset_id,),
+        ).fetchall()
+
         options_by_name: dict[str, list[dict[str, Any]]] = {}
         for row in option_rows:
             options_by_name.setdefault(row["parameter_name"], []).append(dict(row))
-        return jsonify({"mappings": [{**dict(row), "options": options_by_name.get(row["parameter_name"], [])} for row in rows]})
+
+        governance = {
+            row["parameter_name"]: {
+                "data_type": row["data_type"],
+                "parameter_class": row["parameter_class"],
+                "allowed_controls": json.loads(row["governance_control_types"])["allowed"],
+            }
+            for row in profiles
+        }
+
+        return jsonify(
+            {
+                "ruleset_id": ruleset_id,
+                "governance": governance,
+                "mappings": [
+                    {**dict(row), "options": options_by_name.get(row["parameter_name"], [])}
+                    for row in rows
+                ],
+            }
+        )
 
     @app.post("/api/mappings")
     def save_mapping() -> Any:
         body = _json_body()
         parameter_name = str(body.get("parameter_name", "")).strip()
+        ruleset_id = int(body.get("ruleset_id", 0))
         if not parameter_name:
             return jsonify({"error": "parameter_name is required"}), 400
+        if not ruleset_id:
+            return jsonify({"error": "ruleset_id is required"}), 400
+
         conn = connect(_db_path(app))
+        profile = conn.execute(
+            """
+            SELECT governance_control_types
+            FROM ruleset_parameter_profiles
+            WHERE ruleset_id = ? AND parameter_name = ?
+            """,
+            (ruleset_id, parameter_name),
+        ).fetchone()
+        if not profile:
+            return jsonify({"error": "parameter is not available in this ruleset"}), 400
+
+        allowed_controls = json.loads(profile["governance_control_types"])["allowed"]
+        selected_control = str(body.get("control_type", "text")).strip()
+        if selected_control not in allowed_controls:
+            return (
+                jsonify(
+                    {
+                        "error": "control_type is not allowed by governance",
+                        "allowed_controls": allowed_controls,
+                    }
+                ),
+                400,
+            )
+
         with conn:
-            cursor = conn.execute(
+            current = conn.execute(
+                "SELECT MAX(schema_version) AS current_version FROM ui_parameter_configs WHERE ruleset_id = ?",
+                (ruleset_id,),
+            ).fetchone()
+            next_version = int(current["current_version"] or 0) + 1
+            conn.execute(
                 """
                 INSERT INTO ui_parameter_configs(
-                    parameter_name, display_label, help_text, control_type, display_style,
-                    min_value, max_value, step_value, placeholder, image_url, value_image_mode, is_required
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(parameter_name) DO UPDATE SET
+                    parameter_name, ruleset_id, display_label, help_text, control_type, display_style,
+                    min_value, max_value, step_value, placeholder, image_url, value_image_mode, is_required, schema_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(parameter_name, ruleset_id) DO UPDATE SET
                     display_label = excluded.display_label,
                     help_text = excluded.help_text,
                     control_type = excluded.control_type,
@@ -867,13 +1152,15 @@ def create_experience_studio_app(database_path: str | None = None) -> Flask:
                     image_url = excluded.image_url,
                     value_image_mode = excluded.value_image_mode,
                     is_required = excluded.is_required,
+                    schema_version = excluded.schema_version,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
                     parameter_name,
+                    ruleset_id,
                     str(body.get("display_label", "")).strip() or parameter_name,
                     str(body.get("help_text", "")).strip(),
-                    str(body.get("control_type", "text")).strip(),
+                    selected_control,
                     str(body.get("display_style", "classic")).strip(),
                     body.get("min_value"),
                     body.get("max_value"),
@@ -882,23 +1169,74 @@ def create_experience_studio_app(database_path: str | None = None) -> Flask:
                     str(body.get("image_url", "")).strip(),
                     str(body.get("value_image_mode", "none")).strip(),
                     1 if bool(body.get("is_required")) else 0,
+                    next_version,
                 ),
             )
-            conn.execute("DELETE FROM ui_parameter_options WHERE parameter_name = ?", (parameter_name,))
+            conn.execute(
+                "DELETE FROM ui_parameter_options WHERE parameter_name = ? AND ruleset_id = ?",
+                (parameter_name, ruleset_id),
+            )
             option_rows = []
             for index, option in enumerate(body.get("options", [])):
-                option_rows.append((
-                    parameter_name,
-                    str(option.get("value", "")).strip(),
-                    str(option.get("label", "")).strip() or str(option.get("value", "")).strip(),
-                    int(option.get("order", index)),
-                    str(option.get("image_url", "")).strip(),
-                ))
+                option_rows.append(
+                    (
+                        parameter_name,
+                        ruleset_id,
+                        str(option.get("value", "")).strip(),
+                        str(option.get("label", "")).strip() or str(option.get("value", "")).strip(),
+                        int(option.get("order", index + 1)),
+                        str(option.get("image_url", "")).strip(),
+                    )
+                )
             if option_rows:
                 conn.executemany(
-                    "INSERT INTO ui_parameter_options(parameter_name, option_value, option_label, option_order, image_url) VALUES (?, ?, ?, ?, ?)",
+                    """
+                    INSERT INTO ui_parameter_options(parameter_name, ruleset_id, option_value, option_label, option_order, image_url)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
                     option_rows,
                 )
-        return jsonify({"status": "ok", "id": int(cursor.lastrowid) if cursor.lastrowid else None})
+
+            conn.execute(
+                """
+                INSERT INTO ui_schema_history(ruleset_id, schema_version, change_notes, updated_by)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    ruleset_id,
+                    next_version,
+                    str(body.get("change_notes", "Studio mapping update")).strip() or "Studio mapping update",
+                    session.get("username", "ux-admin"),
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE release_workflows
+                SET requires_ux_update = 0,
+                    state = CASE WHEN state = 'draft' THEN 'in_studio' ELSE state END,
+                    ux_schema_version = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE ruleset_id = ?
+                """,
+                (next_version, ruleset_id),
+            )
+        return jsonify({"status": "ok", "schema_version": next_version})
+
+    @app.get("/api/schema-history")
+    def schema_history() -> Any:
+        ruleset_id = request.args.get("ruleset_id", type=int)
+        if not ruleset_id:
+            return jsonify({"error": "ruleset_id is required"}), 400
+        conn = connect(_db_path(app))
+        rows = conn.execute(
+            """
+            SELECT schema_version, change_notes, updated_by, created_at
+            FROM ui_schema_history
+            WHERE ruleset_id = ?
+            ORDER BY schema_version DESC, id DESC
+            """,
+            (ruleset_id,),
+        ).fetchall()
+        return jsonify({"history": [dict(row) for row in rows]})
 
     return app
