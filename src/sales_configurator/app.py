@@ -11,10 +11,12 @@ from .db import connect, init_db, json_dumps
 from .rules_engine import (
     RulesParseError,
     evaluate_rules,
+    evaluate_program,
     infer_memo_parameters,
     normalize_ruleset,
     optimize_configuration,
     parse_ruleset_pseudocode,
+    compile_expression,
     ruleset_to_pseudocode,
 )
 
@@ -820,18 +822,372 @@ def create_configurator_app(database_path: str | None = None) -> Flask:
     _configure_auth(app)
 
     @app.before_request
-    def require_admin_role() -> Any:
+    def require_editor_role() -> Any:
         if request.endpoint in {"login", "logout", "static"}:
             return None
-        if _is_admin():
+        if _is_frontend_editor():
             return None
         if request.path.startswith("/api/"):
-            return jsonify({"error": "admin role required"}), 403
+            return jsonify({"error": "frontend editor role required"}), 403
         return "Forbidden", 403
+
+    def _workspace_rules_for_product(conn: Any, workspace_product_id: int) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            SELECT
+                wr.id,
+                wr.rule_type,
+                wr.target,
+                wr.expression,
+                wr.message,
+                wr.position,
+                wr.is_editable,
+                c1.id AS category_id,
+                c1.name AS category_name,
+                c2.id AS subcategory_id,
+                c2.name AS subcategory_name
+            FROM workspace_rules wr
+            JOIN workspace_categories c1 ON wr.category_id = c1.id
+            LEFT JOIN workspace_categories c2 ON wr.subcategory_id = c2.id
+            WHERE wr.product_id = ?
+            ORDER BY c1.position, c1.id, c2.position, c2.id, wr.position, wr.id
+            """,
+            (workspace_product_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _project_payload(conn: Any, project_id: int) -> dict[str, Any] | None:
+        project = conn.execute(
+            """
+            SELECT id, customer_id, environment, name, project_status, notes, created_at, updated_at
+            FROM customer_projects
+            WHERE id = ?
+            """,
+            (project_id,),
+        ).fetchone()
+        if project is None:
+            return None
+
+        product_rows = conn.execute(
+            """
+            SELECT
+                cpp.id,
+                cpp.project_id,
+                cpp.workspace_product_id,
+                cpp.quantity,
+                cpp.configuration_status,
+                cpp.configuration_state,
+                cpp.last_evaluated_at,
+                cpp.created_at,
+                cpp.updated_at,
+                wp.name AS product_name,
+                wp.description AS product_description
+            FROM customer_project_products cpp
+            JOIN workspace_products wp ON wp.id = cpp.workspace_product_id
+            WHERE cpp.project_id = ?
+            ORDER BY cpp.id
+            """,
+            (project_id,),
+        ).fetchall()
+
+        products: list[dict[str, Any]] = []
+        for row in product_rows:
+            item = dict(row)
+            item["configuration_state"] = json.loads(item["configuration_state"] or "{}")
+            item["workspace_rules"] = _workspace_rules_for_product(conn, int(row["workspace_product_id"]))
+            products.append(item)
+
+        payload = dict(project)
+        payload["products"] = products
+        return payload
+
+    def _all_projects(conn: Any, customer_id: str, environment: str) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM customer_projects
+            WHERE customer_id = ? AND environment = ?
+            ORDER BY updated_at DESC, id DESC
+            """,
+            (customer_id, environment),
+        ).fetchall()
+        return [project for row in rows if (project := _project_payload(conn, int(row["id"]))) is not None]
 
     @app.get("/")
     def index() -> str:
         return render_template("configurator/index.html")
+
+    @app.get("/api/workspace-products")
+    def workspace_products() -> Any:
+        conn = connect(_db_path(app))
+        rows = conn.execute(
+            "SELECT id, name, description FROM workspace_products ORDER BY name, id"
+        ).fetchall()
+        return jsonify({"products": [dict(row) for row in rows]})
+
+    @app.get("/api/projects")
+    def list_projects() -> Any:
+        customer_id = request.args.get("customer_id", "demo-customer")
+        environment = request.args.get("environment", "dev")
+        conn = connect(_db_path(app))
+        return jsonify({"projects": _all_projects(conn, customer_id, environment)})
+
+    @app.post("/api/projects")
+    def create_project() -> Any:
+        body = request.get_json(force=True)
+        customer_id = str(body.get("customer_id", "demo-customer")).strip() or "demo-customer"
+        environment = str(body.get("environment", "dev")).strip() or "dev"
+        name = str(body.get("name", "New Project")).strip() or "New Project"
+        notes = str(body.get("notes", "")).strip()
+        project_status = str(body.get("project_status", "draft")).strip() or "draft"
+
+        conn = connect(_db_path(app))
+        with conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO customer_projects(customer_id, environment, name, project_status, notes)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (customer_id, environment, name, project_status, notes),
+            )
+            project_id = int(cursor.lastrowid)
+        project = _project_payload(conn, project_id)
+        return jsonify(project), 201
+
+    @app.put("/api/projects/<int:project_id>")
+    def update_project(project_id: int) -> Any:
+        body = request.get_json(force=True)
+        conn = connect(_db_path(app))
+        with conn:
+            conn.execute(
+                """
+                UPDATE customer_projects
+                SET name = ?, project_status = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (
+                    str(body.get("name", "")).strip() or f"Project {project_id}",
+                    str(body.get("project_status", "draft")).strip() or "draft",
+                    str(body.get("notes", "")).strip(),
+                    project_id,
+                ),
+            )
+        project = _project_payload(conn, project_id)
+        if project is None:
+            abort(404)
+        return jsonify(project)
+
+    @app.delete("/api/projects/<int:project_id>")
+    def delete_project(project_id: int) -> Any:
+        conn = connect(_db_path(app))
+        with conn:
+            conn.execute("DELETE FROM customer_project_products WHERE project_id = ?", (project_id,))
+            conn.execute("DELETE FROM customer_projects WHERE id = ?", (project_id,))
+        return jsonify({"status": "deleted"})
+
+    @app.post("/api/projects/<int:project_id>/products")
+    def add_project_product(project_id: int) -> Any:
+        body = request.get_json(force=True)
+        workspace_product_id = int(body["workspace_product_id"])
+        quantity = max(1, int(body.get("quantity", 1)))
+        conn = connect(_db_path(app))
+        with conn:
+            existing = conn.execute(
+                """
+                SELECT id, quantity FROM customer_project_products
+                WHERE project_id = ? AND workspace_product_id = ?
+                """,
+                (project_id, workspace_product_id),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE customer_project_products
+                    SET quantity = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (quantity, int(existing["id"])),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO customer_project_products(project_id, workspace_product_id, quantity)
+                    VALUES (?, ?, ?)
+                    """,
+                    (project_id, workspace_product_id, quantity),
+                )
+            conn.execute(
+                "UPDATE customer_projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (project_id,),
+            )
+        project = _project_payload(conn, project_id)
+        if project is None:
+            abort(404)
+        return jsonify(project)
+
+    @app.put("/api/projects/<int:project_id>/products/<int:item_id>")
+    def update_project_product(project_id: int, item_id: int) -> Any:
+        body = request.get_json(force=True)
+        quantity = max(1, int(body.get("quantity", 1)))
+        configuration_status = str(body.get("configuration_status", "not_started")).strip() or "not_started"
+        conn = connect(_db_path(app))
+        with conn:
+            conn.execute(
+                """
+                UPDATE customer_project_products
+                SET quantity = ?, configuration_status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND project_id = ?
+                """,
+                (quantity, configuration_status, item_id, project_id),
+            )
+            conn.execute(
+                "UPDATE customer_projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (project_id,),
+            )
+        project = _project_payload(conn, project_id)
+        if project is None:
+            abort(404)
+        return jsonify(project)
+
+    @app.delete("/api/projects/<int:project_id>/products/<int:item_id>")
+    def delete_project_product(project_id: int, item_id: int) -> Any:
+        conn = connect(_db_path(app))
+        with conn:
+            conn.execute(
+                "DELETE FROM customer_project_products WHERE id = ? AND project_id = ?",
+                (item_id, project_id),
+            )
+            conn.execute(
+                "UPDATE customer_projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (project_id,),
+            )
+        project = _project_payload(conn, project_id)
+        if project is None:
+            abort(404)
+        return jsonify(project)
+
+    @app.get("/api/projects/<int:project_id>/configuration")
+    def project_configuration(project_id: int) -> Any:
+        item_id = request.args.get("item_id", type=int)
+        if item_id is None:
+            abort(400)
+
+        conn = connect(_db_path(app))
+        row = conn.execute(
+            """
+            SELECT cpp.id, cpp.workspace_product_id, cpp.configuration_state, wp.name AS product_name
+            FROM customer_project_products cpp
+            JOIN workspace_products wp ON wp.id = cpp.workspace_product_id
+            WHERE cpp.project_id = ? AND cpp.id = ?
+            """,
+            (project_id, item_id),
+        ).fetchone()
+        if row is None:
+            abort(404)
+
+        project = _project_payload(conn, project_id)
+        if project is None:
+            abort(404)
+
+        deployed = _load_deployed_ruleset(conn, project["environment"])
+        schema = _build_configuration_memo_schema(deployed["rules"], deployed)
+        rules = _workspace_rules_for_product(conn, int(row["workspace_product_id"]))
+
+        controls_res = ui_schema().get_json()
+        controls = controls_res["controls"]
+        configured = json.loads(row["configuration_state"] or "{}")
+
+        return jsonify({
+            "project": project,
+            "project_product_id": item_id,
+            "product_name": row["product_name"],
+            "schema": schema,
+            "controls": controls,
+            "workspace_rules": rules,
+            "configuration_state": configured,
+        })
+
+    @app.post("/api/projects/<int:project_id>/products/<int:item_id>/evaluate")
+    def evaluate_project_configuration(project_id: int, item_id: int) -> Any:
+        payload = request.get_json(force=True)
+        conn = connect(_db_path(app))
+        row = conn.execute(
+            """
+            SELECT p.customer_id, p.environment, cpp.workspace_product_id
+            FROM customer_projects p
+            JOIN customer_project_products cpp ON cpp.project_id = p.id
+            WHERE p.id = ? AND cpp.id = ?
+            """,
+            (project_id, item_id),
+        ).fetchone()
+        if row is None:
+            abort(404)
+
+        customer_id = payload.get("customer_id") or row["customer_id"]
+        api_key = payload["api_key"]
+        environment = row["environment"]
+        if not _authorize(conn, str(customer_id), str(api_key), str(environment)):
+            abort(403)
+
+        configuration = payload.get("configuration", {})
+        deployed = _load_deployed_ruleset(conn, environment)
+        evaluated = evaluate_rules(deployed["rules"], configuration)
+
+        context = {**evaluated.resolved_configuration, **evaluated.calculations}
+        studio_violations: list[dict[str, Any]] = []
+        for workspace_rule in _workspace_rules_for_product(conn, int(row["workspace_product_id"])):
+            passed = True
+            try:
+                passed = bool(evaluate_program(compile_expression(str(workspace_rule["expression"])), context))
+            except Exception:
+                passed = False
+            if not passed:
+                studio_violations.append(
+                    {
+                        "rule_id": workspace_rule["id"],
+                        "category": workspace_rule["category_name"],
+                        "subcategory": workspace_rule.get("subcategory_name") or "",
+                        "message": workspace_rule["message"] or "Workspace rule failed",
+                        "expression": workspace_rule["expression"],
+                    }
+                )
+
+        status = "ready" if evaluated.valid and not studio_violations else "attention_required"
+        project_status = "configured" if status == "ready" else "in_progress"
+
+        with conn:
+            conn.execute(
+                """
+                UPDATE customer_project_products
+                SET configuration_state = ?, configuration_status = ?, last_evaluated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND project_id = ?
+                """,
+                (json_dumps(evaluated.resolved_configuration), status, item_id, project_id),
+            )
+            conn.execute(
+                """
+                UPDATE customer_projects
+                SET project_status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (project_status, project_id),
+            )
+            conn.execute(
+                "INSERT INTO configuration_states(customer_id, environment, state) VALUES (?, ?, ?)",
+                (customer_id, environment, json_dumps(evaluated.resolved_configuration)),
+            )
+
+        return jsonify(
+            {
+                "valid": evaluated.valid,
+                "calculations": evaluated.calculations,
+                "violations": evaluated.violations,
+                "studio_violations": studio_violations,
+                "resolved_configuration": evaluated.resolved_configuration,
+                "configuration_status": status,
+                "project_status": project_status,
+            }
+        )
 
     @app.get("/api/configuration-memo")
     def configuration_memo() -> Any:

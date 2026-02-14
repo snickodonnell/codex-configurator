@@ -468,6 +468,66 @@ def test_workspace_delete_category_removes_child_categories_and_rules(tmp_path) 
     assert refreshed_product["categories"] == []
 
 
+def test_project_workspace_flow_supports_multi_product_configuration(tmp_path) -> None:
+    db = tmp_path / "app.db"
+    rules = create_rules_engine_app(str(db))
+    rules_client = rules.test_client()
+    login(rules_client)
+    seed_ruleset(
+        rules_client,
+        '{"constraints":[{"expression":"quantity>=1","message":"x"}],"calculations":[{"name":"total","formula":"quantity*base_price"}]}',
+    )
+    rules_client.post("/deploy/1", data={"environment": "dev"})
+
+    configurator = create_configurator_app(str(db))
+    client = configurator.test_client()
+    login(client)
+
+    created = client.post(
+        "/api/projects",
+        json={
+            "customer_id": "demo-customer",
+            "environment": "dev",
+            "name": "Pilot Project",
+            "project_status": "draft",
+        },
+    )
+    assert created.status_code == 201
+    project_id = created.get_json()["id"]
+
+    workspace_products = client.get("/api/workspace-products").get_json()["products"]
+    assert len(workspace_products) >= 1
+
+    added = client.post(
+        f"/api/projects/{project_id}/products",
+        json={"workspace_product_id": workspace_products[0]["id"], "quantity": 3},
+    )
+    assert added.status_code == 200
+    product_item = added.get_json()["products"][0]
+
+    config = client.get(f"/api/projects/{project_id}/configuration?item_id={product_item['id']}")
+    assert config.status_code == 200
+    assert "controls" in config.get_json()
+
+    evaluated = client.post(
+        f"/api/projects/{project_id}/products/{product_item['id']}/evaluate",
+        json={
+            "customer_id": "demo-customer",
+            "api_key": "demo-key",
+            "configuration": {"quantity": 2, "base_price": 10, "discount": 0.1, "region": "NA"},
+        },
+    )
+    assert evaluated.status_code == 200
+    body = evaluated.get_json()
+    assert "configuration_status" in body
+    assert "project_status" in body
+
+    projects = client.get("/api/projects?customer_id=demo-customer&environment=dev")
+    assert projects.status_code == 200
+    listed = projects.get_json()["projects"]
+    assert listed[0]["products"][0]["quantity"] == 3
+
+
 def login_ux(client) -> None:
     response = client.post("/login", data={"username": "ux-admin", "password": "ux-admin"})
     assert response.status_code == 302
